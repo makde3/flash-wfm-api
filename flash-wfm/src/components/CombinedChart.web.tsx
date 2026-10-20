@@ -1,4 +1,4 @@
-import { View } from 'react-native';
+import { useWindowDimensions, View } from 'react-native';
 import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 export type ChartPoint = {
@@ -7,20 +7,30 @@ export type ChartPoint = {
   etp: number;
 };
 
+function intervalleDates(nombrePoints: number, largeur: number) {
+  const largeurUtile = Math.max(160, largeur - 120);
+  const datesVisibles = Math.max(2, Math.floor(largeurUtile / 44));
+  const pas = Math.max(1, Math.ceil(nombrePoints / datesVisibles));
+  return pas - 1;
+}
+
 export default function CombinedChart({ points }: { points: ChartPoint[] }) {
-  const dense = points.length > 16;
+  const { width } = useWindowDimensions();
+  const mobile = width < 768;
+  const intervalle = intervalleDates(points.length, mobile ? Math.min(width, 420) : width);
+  const inclinees = !mobile && points.length > 16 && intervalle === 0;
   return (
-    <View style={{ width: '100%', height: dense ? 340 : 300 }}>
+    <View style={{ width: '100%', height: inclinees ? 340 : 300 }}>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: dense ? 16 : 0 }}>
+        <ComposedChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: inclinees ? 16 : 0 }}>
           <CartesianGrid stroke="#E6E9EE" vertical={false} />
           <XAxis
             dataKey="label"
             tick={{ fill: '#687581', fontSize: 11 }}
-            interval={0}
-            angle={dense ? -40 : 0}
-            textAnchor={dense ? 'end' : 'middle'}
-            height={dense ? 54 : 30}
+            interval={intervalle}
+            angle={inclinees ? -40 : 0}
+            textAnchor={inclinees ? 'end' : 'middle'}
+            height={inclinees ? 54 : 30}
           />
           <YAxis yAxisId="volume" domain={[0, 'auto']} tick={{ fill: '#0F2D46', fontSize: 11 }} width={48} />
           <YAxis yAxisId="etp" orientation="right" domain={[0, 'auto']} allowDecimals={false} tick={{ fill: '#2E8F86', fontSize: 11 }} width={36} />
