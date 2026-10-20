@@ -284,9 +284,18 @@ export default function FlashWFM() {
         const workbook = XLSX.read(arrayBuffer, { type: 'array' });
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
         const jsonData = XLSX.utils.sheet_to_json(worksheet);
+        const structureValide =
+          jsonData.length > 0 &&
+          jsonData.every((row) => row != null && Object.keys(row).length >= 3);
+        if (!structureValide) {
+          setDataPreview(null);
+          alert("Format invalide. Votre fichier Excel doit contenir au moins 3 colonnes : Col 1 = Date | Col 2 = File/Activité | Col 3 = Volume.");
+          return;
+        }
         setDataPreview(jsonData);
       } catch (error) {
         console.error("Erreur Excel :", error);
+        setDataPreview(null);
         alert("Erreur lors de la lecture du fichier Excel.");
       }
     }
@@ -576,7 +585,7 @@ export default function FlashWFM() {
               <Text style={styles.successText}>Fichier sélectionné : {fileName}</Text>
             </View>
           )}
-          {dataPreview && (
+          {dataPreview && dataPreview.length > 0 && (
             <TouchableOpacity style={styles.nextBtn} onPress={() => setCurrentStep(2)}>
               <Text style={styles.nextBtnText}>Étape suivante : Configuration →</Text>
             </TouchableOpacity>
