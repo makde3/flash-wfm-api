@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import * as XLSXStyle from 'xlsx-js-style';
 import CombinedChart from '../components/CombinedChart';
 
-const API_BASE = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
+const API_BASE = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'https://flash-wfm-api.onrender.com';
 
 function dateCourte(date: string) {
   const jour = date.match(/^(\d{2}\/\d{2})\/\d{4}$/);
