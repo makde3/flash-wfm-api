@@ -5,6 +5,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as XLSX from 'xlsx';
 import * as XLSXStyle from 'xlsx-js-style';
 import CombinedChart from '../components/CombinedChart';
+import { supabase } from '../lib/supabase';
 
 const API_BASE = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'https://flash-wfm-api.onrender.com';
 
@@ -38,6 +39,9 @@ function HeaderLogo({ subtitle }: { subtitle?: string }) {
         <Text style={styles.brandByline}>by MakConsult</Text>
         <Text style={styles.brandSubtitle}>{subtitle || 'DATA · MÉTIER · PERFORMANCE'}</Text>
       </View>
+      <TouchableOpacity style={styles.logoutBtn} onPress={() => supabase.auth.signOut()}>
+        <Text style={styles.logoutText}>Déconnexion</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -577,6 +581,19 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     letterSpacing: 1.5,
     marginTop: 2,
+  },
+  logoutBtn: {
+    marginLeft: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#0F2D46',
+  },
+  logoutText: {
+    color: '#0F2D46',
+    fontSize: 12,
+    fontWeight: '700',
   },
 
   card: { 
