@@ -35,6 +35,7 @@ function HeaderLogo({ subtitle }: { subtitle?: string }) {
         <Text style={styles.brandTitle}>
           FLASH <Text style={styles.brandTitleSub}>WFM</Text>
         </Text>
+        <Text style={styles.brandByline}>by MakConsult</Text>
         <Text style={styles.brandSubtitle}>{subtitle || 'DATA · MÉTIER · PERFORMANCE'}</Text>
       </View>
     </View>
@@ -563,6 +564,12 @@ const styles = StyleSheet.create({
   brandTitleSub: {
     color: '#F4C430',
     fontWeight: '300',
+  },
+  brandByline: {
+    fontSize: 12,
+    color: '#687581',
+    fontWeight: '500',
+    marginTop: 1,
   },
   brandSubtitle: {
     fontSize: 11,
