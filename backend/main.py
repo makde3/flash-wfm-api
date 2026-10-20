@@ -65,6 +65,62 @@ FEATURES_TEMPORELLES = [
     'semaine_annee', 'semaine_de_l_annee', 'jour_semaine'
 ]
 
+FORMATS_DATE = (
+    '%d/%m/%Y',
+    '%d/%m/%Y %H:%M:%S',
+    '%Y-%m-%d',
+    '%Y-%m-%d %H:%M:%S',
+    '%Y-%m-%dT%H:%M:%S',
+    '%d-%m-%Y',
+    '%d.%m.%Y',
+)
+
+def parser_une_date(valeur):
+    if valeur is None or valeur == '':
+        return pd.NaT
+    if isinstance(valeur, datetime):
+        return valeur.replace(hour=0, minute=0, second=0, microsecond=0)
+    if isinstance(valeur, (int, float)) and not isinstance(valeur, bool):
+        if not math.isfinite(float(valeur)):
+            return pd.NaT
+        return pd.to_datetime(float(valeur), unit='D', origin='1899-12-30')
+    texte = str(valeur).strip()
+    if texte.lower() in {'nan', 'none', 'null', 'nat'}:
+        return pd.NaT
+    nombre = texte.replace(',', '.')
+    if nombre.replace('.', '', 1).isdigit():
+        return pd.to_datetime(float(nombre), unit='D', origin='1899-12-30')
+    for fmt in FORMATS_DATE:
+        try:
+            return datetime.strptime(texte[:19], fmt)
+        except ValueError:
+            continue
+    return pd.to_datetime(texte, errors='coerce', dayfirst=True)
+
+def parser_un_volume(valeur):
+    if valeur is None or valeur == '':
+        return np.nan
+    if isinstance(valeur, (int, float)) and not isinstance(valeur, bool):
+        return float(valeur) if math.isfinite(float(valeur)) else np.nan
+    texte = str(valeur).strip().replace('\u00a0', '').replace(' ', '').replace(',', '.')
+    return pd.to_numeric(texte, errors='coerce')
+
+def apercu(valeur):
+    return f"{valeur!r} ({type(valeur).__name__})"
+
+def journaliser_payload(donnees):
+    print(f"-> Lignes recues : {len(donnees)}", flush=True)
+    if not donnees:
+        print("-> Payload vide", flush=True)
+        return
+    print(f"-> Cles : {list(donnees[0].keys())}", flush=True)
+    for index, ligne in enumerate(donnees[:3]):
+        print(
+            f"-> Exemple {index + 1} : date={apercu(ligne.get('date'))} "
+            f"file={apercu(ligne.get('file'))} volume={apercu(ligne.get('volume'))}",
+            flush=True,
+        )
+
 def debut_prevision(est_court_terme, maintenant):
     if est_court_terme:
         return (maintenant.replace(day=1) + timedelta(days=32)).replace(day=1)
@@ -124,23 +180,34 @@ def generer_plan_production(requete: PrevisionRequest):
     print("NOUVELLE DEMANDE DE PREVISION", flush=True)
     print(f"-> Modele demande : '{requete.modele}'", flush=True)
     print(f"-> Horizon demande : '{requete.horizon}'", flush=True)
-    
+    journaliser_payload(requete.donnees)
+
     df = pd.DataFrame(requete.donnees)
-    
-    if df.shape[1] < 3:
-        return {"statut": "erreur", "message": "Fichier invalide."}
-    
-    colonnes_origine = df.columns.tolist()
-    df = df.rename(columns={
-        colonnes_origine[0]: 'date', 
-        colonnes_origine[1]: 'file', 
-        colonnes_origine[2]: 'volume'
-    })
-    
-    df['date'] = pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce')
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-    df = df.dropna(subset=['date', 'volume'])
-    df = df.sort_values('date').reset_index(drop=True)
+    if df.empty or 'date' not in df.columns or 'volume' not in df.columns:
+        print(f"-> Colonnes recues : {df.columns.tolist()}", flush=True)
+        return {"statut": "erreur", "message": "Fichier invalide : colonnes date et volume absentes."}
+
+    recues = len(df)
+    df['date'] = df['date'].map(parser_une_date)
+    df['volume'] = df['volume'].map(parser_un_volume)
+    invalides = df['date'].isna() | df['volume'].isna()
+    if invalides.any():
+        print(f"-> Lignes ignorees : {int(invalides.sum())} (date ou volume illisible)", flush=True)
+    df = df.loc[~invalides].sort_values('date').reset_index(drop=True)
+    if df.empty:
+        print("-> Aucune ligne exploitable apres parsing. Repli evite.", flush=True)
+        return {
+            "statut": "erreur",
+            "message": "Aucune date ou volume exploitable. Formats acceptes : jj/mm/aaaa, aaaa-mm-jj, ou numero de serie Excel.",
+        }
+
+    print(f"-> Lignes gardees : {len(df)} / {recues}", flush=True)
+    print(f"-> Dates : {df['date'].min().date()} -> {df['date'].max().date()}", flush=True)
+    print(
+        f"-> Volume min/moy/max/ecart : {df['volume'].min():.1f} / {df['volume'].mean():.1f} / "
+        f"{df['volume'].max():.1f} / {df['volume'].std(ddof=0):.1f}",
+        flush=True,
+    )
 
     est_court_terme = (requete.horizon == 'court_terme')
     nb_steps_jour = 30 if est_court_terme else 365
@@ -193,6 +260,7 @@ def generer_plan_production(requete: PrevisionRequest):
             
             X = features_temporelles(df['date'])
             y = df['volume']
+            print(f"-> Features NaN : {int(X[FEATURES_TEMPORELLES].isna().sum().sum())}", flush=True)
             
             model = lgb.LGBMRegressor(n_estimators=100, learning_rate=0.05, verbose=-1)
             model.fit(X[FEATURES_TEMPORELLES], y, categorical_feature=['month_tier'])
@@ -234,10 +302,23 @@ def generer_plan_production(requete: PrevisionRequest):
             nom_modele_final = "Moyenne (suite à un plantage)"
 
     moyenne_volume = float(df['volume'].mean()) if len(df) else 1.0
-    previsions_brutes = [
-        float(vol) if vol is not None and math.isfinite(float(vol)) else moyenne_volume
-        for vol in previsions_brutes
-    ]
+    non_finis = 0
+    previsions_propres = []
+    for vol in previsions_brutes:
+        try:
+            valeur = float(vol)
+        except (TypeError, ValueError):
+            valeur = moyenne_volume
+        if not math.isfinite(valeur):
+            non_finis += 1
+            valeur = moyenne_volume
+        previsions_propres.append(valeur)
+    previsions_brutes = previsions_propres
+    ecart = float(np.std(previsions_brutes)) if previsions_brutes else 0.0
+    print(f"-> Previsions non finies remplacees par la moyenne : {non_finis}", flush=True)
+    print(f"-> Ecart-type des previsions : {ecart:.2f}", flush=True)
+    if ecart < 1e-6:
+        print("-> Prevision plate : l'historique ne distingue pas les periodes, pas un repli NaN.", flush=True)
 
     plan_production = []
     if est_court_terme:
