@@ -248,16 +248,21 @@ export default function FlashWFM() {
   const [etpResult, setEtpResult] = useState<number | null>(null);
   const [predictedVolume, setPredictedVolume] = useState<number>(150);
   const [abonnement, setAbonnement] = useState<'free' | 'pro'>('free');
+  const [finEssai, setFinEssai] = useState<number | null>(null);
   const [modalePro, setModalePro] = useState(false);
   const estPro = abonnement === 'pro';
+  const essaiActif = finEssai !== null && Date.now() < finEssai;
+  const moyenneDisponible = estPro || finEssai === null || essaiActif;
 
   useEffect(() => {
     let actif = true;
     supabase.auth.getUser().then(async ({ data }) => {
-      const userId = data.user?.id;
-      if (!userId) return;
-      const { data: profil } = await supabase.from('profiles').select('plan').eq('user_id', userId).maybeSingle();
+      const user = data.user;
+      if (!user) return;
+      const { data: profil } = await supabase.from('profiles').select('plan').eq('user_id', user.id).maybeSingle();
       if (!actif) return;
+      const creation = user.created_at ? new Date(user.created_at).getTime() : Date.now();
+      setFinEssai(creation + 3 * 24 * 60 * 60 * 1000);
       setAbonnement(profil?.plan === 'pro' ? 'pro' : 'free');
     });
     return () => {
@@ -293,7 +298,7 @@ export default function FlashWFM() {
       alert("Veuillez sélectionner un algorithme de prévision.");
       return;
     }
-    if (!estPro && selectedModel !== 'Prophet') {
+    if ((selectedModel === 'Prophet' && !moyenneDisponible) || (selectedModel !== 'Prophet' && !estPro)) {
       setModalePro(true);
       return;
     }
@@ -332,11 +337,7 @@ export default function FlashWFM() {
       }, 60000);
 
       if (data.statut === 'succès' && Array.isArray(data.plan)) {
-        const previsionComplete = data.plan;
-        const previsionAffichee = !estPro && selectedModel === 'Prophet'
-          ? previsionComplete.slice(0, 3)
-          : previsionComplete;
-        setPlan(previsionAffichee);
+        setPlan(data.plan);
       } else {
         alert("Erreur du moteur : " + (data.message || "Données invalides"));
       }
@@ -480,8 +481,12 @@ export default function FlashWFM() {
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>Étape 2 : Modèle de prévision</Text>
               <View style={styles.modelRow}>
-                <TouchableOpacity style={[styles.modelBtn, styles.modelBtnDash, selectedModel === 'Prophet' && styles.modelBtnActive]} onPress={() => setSelectedModel('Prophet')}>
-                  <Text style={[styles.modelBtnText, selectedModel === 'Prophet' && styles.modelBtnTextActive]}>📈 Prophet (Moyenne & Saisonnier)</Text>
+                <TouchableOpacity
+                  style={[styles.modelBtn, styles.modelBtnDash, !moyenneDisponible && styles.modelBtnLocked, moyenneDisponible && selectedModel === 'Prophet' && styles.modelBtnActive]}
+                  onPress={() => (moyenneDisponible ? setSelectedModel('Prophet') : setModalePro(true))}
+                >
+                  <Text style={[styles.modelBtnText, moyenneDisponible && selectedModel === 'Prophet' && styles.modelBtnTextActive]}>📈 Prophet (Moyenne & Saisonnier)</Text>
+                  {!moyenneDisponible ? <Text style={styles.proBadge}>Pro</Text> : null}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modelBtn, styles.modelBtnDash, !estPro && styles.modelBtnLocked, estPro && selectedModel === 'Holt-Winters' && styles.modelBtnActive]}
@@ -498,6 +503,10 @@ export default function FlashWFM() {
                   {!estPro ? <Text style={styles.proBadge}>Pro</Text> : null}
                 </TouchableOpacity>
               </View>
+
+              {!estPro && essaiActif ? (
+                <Text style={styles.hint}>Essai gratuit du modèle Moyenne : encore {Math.max(1, Math.ceil((finEssai! - Date.now()) / (24 * 60 * 60 * 1000)))} jour(s).</Text>
+              ) : null}
 
               <Text style={styles.horizonLabel}>Horizon de prévision</Text>
               <View style={styles.horizonRow}>
