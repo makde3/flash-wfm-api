@@ -247,6 +247,23 @@ export default function FlashWFM() {
   const [showResult, setShowResult] = useState(false);
   const [etpResult, setEtpResult] = useState<number | null>(null);
   const [predictedVolume, setPredictedVolume] = useState<number>(150);
+  const [abonnement, setAbonnement] = useState<'free' | 'pro'>('free');
+  const [modalePro, setModalePro] = useState(false);
+  const estPro = abonnement === 'pro';
+
+  useEffect(() => {
+    let actif = true;
+    supabase.auth.getUser().then(async ({ data }) => {
+      const userId = data.user?.id;
+      if (!userId) return;
+      const { data: profil } = await supabase.from('profiles').select('plan').eq('user_id', userId).maybeSingle();
+      if (!actif) return;
+      setAbonnement(profil?.plan === 'pro' ? 'pro' : 'free');
+    });
+    return () => {
+      actif = false;
+    };
+  }, []);
 
   const pickDocument = async () => {
     let result = await DocumentPicker.getDocumentAsync({
@@ -274,6 +291,10 @@ export default function FlashWFM() {
     if (loading) return;
     if (!selectedModel) {
       alert("Veuillez sélectionner un algorithme de prévision.");
+      return;
+    }
+    if (!estPro && (selectedModel !== 'Prophet' || horizon === 'long_terme')) {
+      setModalePro(true);
       return;
     }
     if (!dataPreview) {
@@ -311,7 +332,7 @@ export default function FlashWFM() {
       }, 60000);
 
       if (data.statut === 'succès' && Array.isArray(data.plan)) {
-        setPlan(data.plan);
+        setPlan(estPro ? data.plan : data.plan.slice(0, 3));
       } else {
         alert("Erreur du moteur : " + (data.message || "Données invalides"));
       }
@@ -324,6 +345,10 @@ export default function FlashWFM() {
   };
 
   const handleExport = () => {
+    if (!estPro) {
+      setModalePro(true);
+      return;
+    }
     if (!plan) return;
     exporterPlanExcel({
       plan,
@@ -454,11 +479,19 @@ export default function FlashWFM() {
                 <TouchableOpacity style={[styles.modelBtn, styles.modelBtnDash, selectedModel === 'Prophet' && styles.modelBtnActive]} onPress={() => setSelectedModel('Prophet')}>
                   <Text style={[styles.modelBtnText, selectedModel === 'Prophet' && styles.modelBtnTextActive]}>📈 Prophet (Moyenne & Saisonnier)</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.modelBtn, styles.modelBtnDash, selectedModel === 'Holt-Winters' && styles.modelBtnActive]} onPress={() => setSelectedModel('Holt-Winters')}>
-                  <Text style={[styles.modelBtnText, selectedModel === 'Holt-Winters' && styles.modelBtnTextActive]}>📊 Holt-Winters (Tendance Lissée)</Text>
+                <TouchableOpacity
+                  style={[styles.modelBtn, styles.modelBtnDash, !estPro && styles.modelBtnLocked, estPro && selectedModel === 'Holt-Winters' && styles.modelBtnActive]}
+                  onPress={() => (estPro ? setSelectedModel('Holt-Winters') : setModalePro(true))}
+                >
+                  <Text style={[styles.modelBtnText, estPro && selectedModel === 'Holt-Winters' && styles.modelBtnTextActive]}>📊 Holt-Winters (Tendance Lissée)</Text>
+                  {!estPro ? <Text style={styles.proBadge}>Pro</Text> : null}
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.modelBtn, styles.modelBtnDash, selectedModel === 'LightGBM' && styles.modelBtnActive]} onPress={() => setSelectedModel('LightGBM')}>
-                  <Text style={[styles.modelBtnText, selectedModel === 'LightGBM' && styles.modelBtnTextActive]}>⭐ LightGBM (Gradient Boosting)</Text>
+                <TouchableOpacity
+                  style={[styles.modelBtn, styles.modelBtnDash, !estPro && styles.modelBtnLocked, estPro && selectedModel === 'LightGBM' && styles.modelBtnActive]}
+                  onPress={() => (estPro ? setSelectedModel('LightGBM') : setModalePro(true))}
+                >
+                  <Text style={[styles.modelBtnText, estPro && selectedModel === 'LightGBM' && styles.modelBtnTextActive]}>⭐ LightGBM (Gradient Boosting)</Text>
+                  {!estPro ? <Text style={styles.proBadge}>Pro</Text> : null}
                 </TouchableOpacity>
               </View>
 
@@ -468,13 +501,21 @@ export default function FlashWFM() {
                   style={[styles.horizonBtn, horizon === 'court_terme' && styles.modelBtnActive]}
                   onPress={() => { setHorizon('court_terme'); setPlan(null); }}
                 >
-                  <Text style={[styles.modelBtnText, horizon === 'court_terme' && styles.modelBtnTextActive]}>Court terme</Text>
+                  <Text style={[styles.modelBtnText, horizon === 'court_terme' && styles.modelBtnTextActive]}>{estPro ? 'Court terme' : '3 jours'}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.horizonBtn, horizon === 'long_terme' && styles.modelBtnActive]}
-                  onPress={() => { setHorizon('long_terme'); setPlan(null); }}
+                  style={[styles.horizonBtn, !estPro && styles.modelBtnLocked, estPro && horizon === 'long_terme' && styles.modelBtnActive]}
+                  onPress={() => {
+                    if (!estPro) {
+                      setModalePro(true);
+                      return;
+                    }
+                    setHorizon('long_terme');
+                    setPlan(null);
+                  }}
                 >
-                  <Text style={[styles.modelBtnText, horizon === 'long_terme' && styles.modelBtnTextActive]}>Long terme</Text>
+                  <Text style={[styles.modelBtnText, estPro && horizon === 'long_terme' && styles.modelBtnTextActive]}>Long terme</Text>
+                  {!estPro ? <Text style={styles.proBadge}>Pro</Text> : null}
                 </TouchableOpacity>
               </View>
 
@@ -493,7 +534,7 @@ export default function FlashWFM() {
                 <CombinedChart points={plan.map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
                 <View style={styles.planHeader}>
                   <Text style={styles.planHeaderTitle}>Plan de production</Text>
-                  <TouchableOpacity style={styles.exportBtn} onPress={handleExport}>
+                  <TouchableOpacity style={[styles.exportBtn, !estPro && styles.modelBtnLocked]} onPress={handleExport}>
                     <Text style={styles.exportBtnText}>Exporter en Excel</Text>
                   </TouchableOpacity>
                 </View>
@@ -502,6 +543,16 @@ export default function FlashWFM() {
             )}
           </View>
         </ScrollView>
+        {modalePro ? (
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Passez au plan Pro pour débloquer</Text>
+              <TouchableOpacity style={styles.generateBtn} onPress={() => setModalePro(false)}>
+                <Text style={styles.generateBtnText}>Fermer</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
       </SafeAreaView>
     );
   }
@@ -619,7 +670,12 @@ const styles = StyleSheet.create({
   backBtn: { alignSelf: 'flex-start', paddingBottom: 15 },
   backBtnText: { color: '#687581', fontWeight: 'bold', fontSize: 16 },
   infoTextDark: { color: '#687581', marginBottom: 20, fontStyle: 'italic', textAlign: 'center', fontWeight: 'bold' },
-  modelBtn: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', padding: 15, borderRadius: 8, width: '100%', marginBottom: 12, alignItems: 'center' },
+  modelBtn: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', padding: 15, borderRadius: 8, width: '100%', marginBottom: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  modelBtnLocked: { opacity: 0.55 },
+  proBadge: { backgroundColor: '#F4C430', color: '#0F2D46', fontSize: 11, fontWeight: '800', overflow: 'hidden', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  modalBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15, 45, 70, 0.45)', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 20 },
+  modalCard: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 24, width: '100%', maxWidth: 420 },
+  modalTitle: { color: '#0F2D46', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 },
   modelBtnActive: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
   modelBtnText: { color: '#0F2D46', fontWeight: '600', fontSize: 14, textAlign: 'center' },
   modelBtnTextActive: { color: '#F4C430', fontWeight: 'bold' },
@@ -628,7 +684,7 @@ const styles = StyleSheet.create({
   generateBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   horizonLabel: { alignSelf: 'flex-start', color: '#0F2D46', fontWeight: 'bold', marginBottom: 8, marginTop: 12 },
   horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 12 },
-  horizonBtn: { flex: 1, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', paddingVertical: 14, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center' },
+  horizonBtn: { flex: 1, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', paddingVertical: 14, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 40 },
   dash: { width: '100%', maxWidth: 1100, alignItems: 'stretch' },
   panel: { backgroundColor: '#FFFFFF', padding: 20, borderRadius: 12, width: '100%', marginBottom: 16, shadowColor: '#0F2D46', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 6, elevation: 4 },
