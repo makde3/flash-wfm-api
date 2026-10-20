@@ -293,7 +293,7 @@ export default function FlashWFM() {
       alert("Veuillez sélectionner un algorithme de prévision.");
       return;
     }
-    if (!estPro && (selectedModel !== 'Prophet' || horizon === 'long_terme')) {
+    if (!estPro && selectedModel !== 'Prophet') {
       setModalePro(true);
       return;
     }
@@ -332,7 +332,11 @@ export default function FlashWFM() {
       }, 60000);
 
       if (data.statut === 'succès' && Array.isArray(data.plan)) {
-        setPlan(estPro ? data.plan : data.plan.slice(0, 3));
+        const previsionComplete = data.plan;
+        const previsionAffichee = !estPro && selectedModel === 'Prophet'
+          ? previsionComplete.slice(0, 3)
+          : previsionComplete;
+        setPlan(previsionAffichee);
       } else {
         alert("Erreur du moteur : " + (data.message || "Données invalides"));
       }
@@ -501,21 +505,13 @@ export default function FlashWFM() {
                   style={[styles.horizonBtn, horizon === 'court_terme' && styles.modelBtnActive]}
                   onPress={() => { setHorizon('court_terme'); setPlan(null); }}
                 >
-                  <Text style={[styles.modelBtnText, horizon === 'court_terme' && styles.modelBtnTextActive]}>{estPro ? 'Court terme' : '3 jours'}</Text>
+                  <Text style={[styles.modelBtnText, horizon === 'court_terme' && styles.modelBtnTextActive]}>Court terme</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.horizonBtn, !estPro && styles.modelBtnLocked, estPro && horizon === 'long_terme' && styles.modelBtnActive]}
-                  onPress={() => {
-                    if (!estPro) {
-                      setModalePro(true);
-                      return;
-                    }
-                    setHorizon('long_terme');
-                    setPlan(null);
-                  }}
+                  style={[styles.horizonBtn, horizon === 'long_terme' && styles.modelBtnActive]}
+                  onPress={() => { setHorizon('long_terme'); setPlan(null); }}
                 >
-                  <Text style={[styles.modelBtnText, estPro && horizon === 'long_terme' && styles.modelBtnTextActive]}>Long terme</Text>
-                  {!estPro ? <Text style={styles.proBadge}>Pro</Text> : null}
+                  <Text style={[styles.modelBtnText, horizon === 'long_terme' && styles.modelBtnTextActive]}>Long terme</Text>
                 </TouchableOpacity>
               </View>
 
