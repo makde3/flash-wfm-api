@@ -254,6 +254,38 @@ function messageHttp(status: number, detail: string) {
   return `Erreur HTTP ${status}`;
 }
 
+async function creerSessionCheckout(token: string) {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/create-checkout-session`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    console.error(error);
+    throw new Error("Impossible de joindre le serveur de paiement. Réessayez dans un instant.");
+  }
+  const texte = await response.text();
+  let data: any = null;
+  if (texte) {
+    try {
+      data = JSON.parse(texte);
+    } catch {
+      data = null;
+    }
+  }
+  if (!response.ok) {
+    const detail = typeof data?.detail === 'string' ? data.detail : typeof data?.message === 'string' ? data.message : '';
+    throw new ErreurApi(response.status, messageHttp(response.status, detail));
+  }
+  return data ?? {};
+}
+
 async function postApi(path: string, body: unknown, timeoutMs = 5000, token?: string) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -358,7 +390,7 @@ export default function FlashWFM() {
         alert("Session expirée. Veuillez vous reconnecter.");
         return;
       }
-      const data = await postApi('/create-checkout-session', {}, 15000, token);
+      const data = await creerSessionCheckout(token);
       if (typeof data?.url !== 'string' || !data.url) {
         alert("Session de paiement indisponible.");
         return;
@@ -370,7 +402,11 @@ export default function FlashWFM() {
       await Linking.openURL(data.url);
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "Session de paiement indisponible.");
+      if (error instanceof ErreurApi) {
+        alert(error.message);
+      } else {
+        alert("Impossible de joindre le serveur de paiement. Réessayez dans un instant.");
+      }
     } finally {
       setPaiementEnCours(false);
     }
@@ -639,7 +675,7 @@ export default function FlashWFM() {
               <Text style={styles.modalTitle}>Passez au plan Pro pour débloquer</Text>
               <TouchableOpacity style={[styles.generateBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={passerAuPro} disabled={paiementEnCours}>
                 {paiementEnCours ? (
-                  <ActivityIndicator color="#0F2D46" />
+                  <Text style={styles.paiementAttente}>Connexion au serveur de paiement... (cela peut prendre quelques secondes)</Text>
                 ) : (
                   <Text style={styles.generateBtnText}>Passer au plan Pro</Text>
                 )}
@@ -783,6 +819,7 @@ const styles = StyleSheet.create({
   generateBtn: { marginTop: 10, backgroundColor: '#7FC8C0', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 8, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 50 },
   generateBtnDisabled: { opacity: 0.7 },
   generateBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  paiementAttente: { color: '#0F2D46', fontSize: 14, fontWeight: '600', textAlign: 'center', lineHeight: 20 },
   horizonLabel: { alignSelf: 'flex-start', color: '#0F2D46', fontWeight: 'bold', marginBottom: 8, marginTop: 12 },
   horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 12 },
   horizonBtn: { flex: 1, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', paddingVertical: 14, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
