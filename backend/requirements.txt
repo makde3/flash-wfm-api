@@ -9,3 +9,4 @@ scikit-learn
 PyJWT==2.15.1
 cryptography==46.0.3
 supabase==2.33.0
+stripe==16.0.0

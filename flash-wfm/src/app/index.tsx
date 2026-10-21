@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Platform, ScrollView, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Platform, ScrollView, TextInput, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as XLSX from 'xlsx';
@@ -309,25 +309,72 @@ export default function FlashWFM() {
   const [abonnement, setAbonnement] = useState<'free' | 'pro'>('free');
   const [finEssai, setFinEssai] = useState<number | null>(null);
   const [modalePro, setModalePro] = useState(false);
+  const [paiementEnCours, setPaiementEnCours] = useState(false);
+  const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
   const estPro = abonnement === 'pro';
   const essaiActif = finEssai !== null && Date.now() < finEssai;
   const moyenneDisponible = estPro || finEssai === null || essaiActif;
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('success') === 'true') {
+      setMessagePaiement("Paiement confirmé. Votre abonnement Pro est en cours d'activation.");
+    } else if (params.get('canceled') === 'true') {
+      setMessagePaiement("Paiement annulé. Aucun débit n'a été effectué.");
+    } else {
+      return;
+    }
+    params.delete('success');
+    params.delete('canceled');
+    const query = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+  }, []);
 
   useEffect(() => {
     let actif = true;
     supabase.auth.getUser().then(async ({ data }) => {
       const user = data.user;
       if (!user) return;
-      const { data: profil } = await supabase.from('profiles').select('plan').eq('user_id', user.id).maybeSingle();
+      const { data: abonnements } = await supabase.from('subscriptions').select('status').eq('user_id', user.id);
       if (!actif) return;
       const creation = user.created_at ? new Date(user.created_at).getTime() : Date.now();
+      const pro = (abonnements ?? []).some((ligne) => ligne.status === 'active' || ligne.status === 'trialing');
       setFinEssai(creation + 3 * 24 * 60 * 60 * 1000);
-      setAbonnement(profil?.plan === 'pro' ? 'pro' : 'free');
+      setAbonnement(pro ? 'pro' : 'free');
     });
     return () => {
       actif = false;
     };
   }, []);
+
+  const passerAuPro = async () => {
+    if (paiementEnCours) return;
+    setPaiementEnCours(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        alert("Session expirée. Veuillez vous reconnecter.");
+        return;
+      }
+      const data = await postApi('/create-checkout-session', {}, 15000, token);
+      if (typeof data?.url !== 'string' || !data.url) {
+        alert("Session de paiement indisponible.");
+        return;
+      }
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.location.assign(data.url);
+        return;
+      }
+      await Linking.openURL(data.url);
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof Error ? error.message : "Session de paiement indisponible.");
+    } finally {
+      setPaiementEnCours(false);
+    }
+  };
 
   const pickDocument = async () => {
     let result = await DocumentPicker.getDocumentAsync({
@@ -465,6 +512,11 @@ export default function FlashWFM() {
             <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentStep(1)}>
               <Text style={styles.backBtnText}>← Retour</Text>
             </TouchableOpacity>
+            {messagePaiement ? (
+              <View style={styles.successBox}>
+                <Text style={styles.successText}>{messagePaiement}</Text>
+              </View>
+            ) : null}
 
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>Simulation Erlang</Text>
@@ -585,8 +637,15 @@ export default function FlashWFM() {
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Passez au plan Pro pour débloquer</Text>
-              <TouchableOpacity style={styles.generateBtn} onPress={() => setModalePro(false)}>
-                <Text style={styles.generateBtnText}>Fermer</Text>
+              <TouchableOpacity style={[styles.generateBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={passerAuPro} disabled={paiementEnCours}>
+                {paiementEnCours ? (
+                  <ActivityIndicator color="#0F2D46" />
+                ) : (
+                  <Text style={styles.generateBtnText}>Passer au plan Pro</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.backBtn} onPress={() => setModalePro(false)}>
+                <Text style={styles.backBtnText}>Fermer</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -599,6 +658,11 @@ export default function FlashWFM() {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollCenter}>
         <HeaderLogo subtitle="DATA · MÉTIER · PERFORMANCE" />
+        {messagePaiement ? (
+          <View style={[styles.successBox, { maxWidth: 600, marginBottom: 16 }]}>
+            <Text style={styles.successText}>{messagePaiement}</Text>
+          </View>
+        ) : null}
         <View style={styles.card}>
           <Text style={styles.stepText}>Étape 1 : Importer l'historique de charge (Date | File | Volume)</Text>
           <TouchableOpacity style={styles.uploadBtn} onPress={pickDocument}>

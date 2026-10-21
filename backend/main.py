@@ -1,20 +1,74 @@
 import math
 import os
 import sys
+import uuid
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import jwt
 import lightgbm as lgb
+import stripe
 from supabase import create_client
+
+MAX_CORPS_OCTETS = 5 * 1024 * 1024
+MAX_LIGNES_HISTORIQUE = 5000
+
+class PayloadTropGrand(Exception):
+    pass
+
+class LimiteCorpsMiddleware:
+    def __init__(self, app, max_octets: int = MAX_CORPS_OCTETS):
+        self.app = app
+        self.max_octets = max_octets
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        en_tetes = {cle.lower(): valeur for cle, valeur in scope.get("headers", [])}
+        longueur = en_tetes.get(b"content-length")
+        if longueur:
+            try:
+                if int(longueur) > self.max_octets:
+                    reponse = JSONResponse(
+                        status_code=413,
+                        content={"detail": "Corps de requête trop volumineux (5 Mo max)."},
+                    )
+                    await reponse(scope, receive, send)
+                    return
+            except ValueError:
+                pass
+
+        recu = 0
+
+        async def receive_limite():
+            nonlocal recu
+            message = await receive()
+            if message["type"] == "http.request":
+                recu += len(message.get("body", b""))
+                if recu > self.max_octets:
+                    raise PayloadTropGrand()
+            return message
+
+        await self.app(scope, receive_limite, send)
 
 app = FastAPI()
 
+@app.exception_handler(PayloadTropGrand)
+async def corps_trop_grand(request: Request, exc: PayloadTropGrand):
+    return JSONResponse(
+        status_code=413,
+        content={"detail": "Corps de requête trop volumineux (5 Mo max)."},
+    )
+
+app.add_middleware(LimiteCorpsMiddleware, max_octets=MAX_CORPS_OCTETS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -257,7 +311,7 @@ def identite_depuis_authorization(authorization: str | None) -> str:
         raise HTTPException(status_code=401, detail="Token absent ou invalide.")
     return str(payload["sub"])
 
-def lire_profil(user_id: str) -> dict:
+def client_service():
     global _client_service
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     cle = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -265,14 +319,19 @@ def lire_profil(user_id: str) -> dict:
         raise HTTPException(status_code=503, detail="Vérification des droits indisponible.")
     if _client_service is None:
         _client_service = create_client(url, cle)
+    return _client_service
+
+def lire_profil(user_id: str) -> dict:
     try:
         reponse = (
-            _client_service.table("profiles")
-            .select("plan, created_at")
+            client_service().table("profiles")
+            .select("created_at")
             .eq("user_id", user_id)
             .limit(1)
             .execute()
         )
+    except HTTPException:
+        raise
     except Exception:
         print("-> Lecture du profil impossible", flush=True)
         raise HTTPException(status_code=403, detail="Droits utilisateur introuvables.")
@@ -281,23 +340,237 @@ def lire_profil(user_id: str) -> dict:
         raise HTTPException(status_code=403, detail="Droits utilisateur introuvables.")
     return lignes[0]
 
-def verifier_droit_modele(modele: str, profil: dict) -> None:
-    if str(profil.get("plan") or "").strip() == "pro":
+def periode_encore_valide(valeur) -> bool:
+    if not valeur:
+        return False
+    try:
+        fin = datetime.fromisoformat(str(valeur).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if fin.tzinfo is None:
+        fin = fin.replace(tzinfo=timezone.utc)
+    return fin > datetime.now(timezone.utc)
+
+def abonnement_pro_actif(user_id: str) -> bool:
+    try:
+        reponse = (
+            client_service().table("subscriptions")
+            .select("status, current_period_end")
+            .eq("user_id", user_id)
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        print("-> Lecture de l'abonnement impossible", flush=True)
+        raise HTTPException(status_code=403, detail="Droits utilisateur introuvables.")
+    for ligne in reponse.data or []:
+        if str(ligne.get("status") or "") in {"active", "trialing"} and periode_encore_valide(ligne.get("current_period_end")):
+            return True
+    return False
+
+def erreur_memoire(exc: BaseException) -> bool:
+    if isinstance(exc, MemoryError):
+        return True
+    texte = str(exc).lower()
+    return any(indice in texte for indice in ("out of memory", "memoryerror", "bad_alloc", "cannot allocate", "oom"))
+
+def lever_si_memoire(exc: BaseException) -> None:
+    if not erreur_memoire(exc):
+        return
+    print("-> Entrainement interrompu : memoire insuffisante", flush=True)
+    raise HTTPException(status_code=500, detail="Mémoire insuffisante pour entraîner ce modèle.") from exc
+
+def entrainer_holt(df, dates_futur):
+    print("-> Lancement de l'algorithme : Holt-Winters", flush=True)
+    historique = df.set_index('date')['volume'].astype(float).sort_index()
+    historique = historique[~historique.index.duplicated(keep='last')].asfreq('D')
+    historique = historique.interpolate(limit_direction='both')
+    if len(historique) < 2 * SAISON_ANNUELLE:
+        raise ValueError("deux cycles de 365 jours necessaires")
+    fit = ExponentialSmoothing(
+        historique.to_numpy(dtype=float),
+        trend='add',
+        seasonal='add',
+        seasonal_periods=SAISON_ANNUELLE,
+        initialization_method="heuristic"
+    ).fit()
+    dernier = historique.index.max()
+    horizon = pd.DatetimeIndex(dates_futur)
+    pas = max(0, (horizon.max().normalize() - dernier.normalize()).days)
+    ajustees = pd.Series(fit.fittedvalues, index=historique.index)
+    if pas:
+        suite_index = pd.date_range(dernier + pd.Timedelta(days=1), periods=pas, freq='D')
+        suite = pd.Series(fit.forecast(pas), index=suite_index)
+        complet = pd.concat([ajustees, suite])
+    else:
+        complet = ajustees
+    complet = complet[~complet.index.duplicated(keep='last')].reindex(horizon)
+    complet = complet.interpolate(limit_direction='both')
+    return complet.tolist(), "Holt-Winters"
+
+def entrainer_lightgbm(df, dates_futur):
+    print("-> Lancement de l'algorithme : LightGBM Boosté", flush=True)
+    df = df.copy()
+    df['jour_semaine'] = df['date'].dt.dayofweek
+    df['mois'] = df['date'].dt.month
+    moyenne_globale = df['volume'].mean()
+    facteur_semaine = (df.groupby('jour_semaine')['volume'].mean() / moyenne_globale).to_dict()
+    facteur_mois = (df.groupby('mois')['volume'].mean() / moyenne_globale).to_dict()
+    X = features_temporelles(df['date'])
+    y = df['volume']
+    print(f"-> Features NaN : {int(X[FEATURES_TEMPORELLES].isna().sum().sum())}", flush=True)
+    model = lgb.LGBMRegressor(n_estimators=100, learning_rate=0.05, verbose=-1)
+    model.fit(X[FEATURES_TEMPORELLES], y, categorical_feature=['month_tier'])
+    X_futur = features_temporelles(dates_futur)
+    preds_brutes = model.predict(X_futur[FEATURES_TEMPORELLES])
+    previsions = []
+    for i, jour in enumerate(dates_futur):
+        val_base = preds_brutes[i]
+        coef_s = facteur_semaine.get(int(jour.dayofweek), 1.0)
+        coef_m = facteur_mois.get(int(jour.month), 1.0)
+        previsions.append(val_base * 0.5 + (moyenne_globale * coef_s * coef_m) * 0.5)
+    return previsions, "LightGBM"
+
+def verifier_droit_modele(modele: str, profil: dict, pro_actif: bool) -> None:
+    if pro_actif:
         return
     if modele_avance(modele):
         raise HTTPException(status_code=403, detail="Ce modèle nécessite un abonnement Pro.")
     if essai_expire(profil.get("created_at")):
         raise HTTPException(status_code=403, detail="L'essai gratuit est expiré.")
 
+def verifier_signature_stripe(corps: bytes, signature: str | None) -> dict:
+    secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        print("-> Secret de webhook Stripe absent", flush=True)
+        raise HTTPException(status_code=503, detail="Vérification du webhook indisponible.")
+    if not signature:
+        raise HTTPException(status_code=400, detail="Signature Stripe invalide.")
+    try:
+        evenement = stripe.Webhook.construct_event(corps, signature, secret)
+    except (stripe.SignatureVerificationError, ValueError):
+        raise HTTPException(status_code=400, detail="Signature Stripe invalide.")
+    if hasattr(evenement, "to_dict"):
+        return evenement.to_dict()
+    return evenement
+
+def fin_periode_stripe(abonnement: dict):
+    periode = abonnement.get("current_period_end")
+    if periode is None:
+        items = ((abonnement.get("items") or {}).get("data") or [])
+        if items:
+            periode = items[0].get("current_period_end")
+    if periode is None:
+        return None
+    return datetime.fromtimestamp(int(periode), tz=timezone.utc).isoformat()
+
+def utilisateur_abonnement(abonnement: dict) -> str | None:
+    meta = abonnement.get("metadata") or {}
+    candidat = meta.get("user_id") or meta.get("supabase_user_id")
+    if not candidat:
+        return None
+    try:
+        return str(uuid.UUID(str(candidat)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+def enregistrer_abonnement(abonnement: dict, supprime: bool) -> None:
+    identifiant = abonnement.get("id")
+    if not identifiant:
+        raise HTTPException(status_code=400, detail="Abonnement Stripe incomplet.")
+    statut = "canceled" if supprime and not abonnement.get("status") else (abonnement.get("status") or "canceled")
+    champs = {
+        "stripe_customer_id": abonnement.get("customer"),
+        "stripe_subscription_id": identifiant,
+        "status": statut,
+        "current_period_end": fin_periode_stripe(abonnement),
+    }
+    user_id = utilisateur_abonnement(abonnement)
+    client = client_service()
+    try:
+        if user_id:
+            champs["user_id"] = user_id
+            client.table("subscriptions").upsert(champs, on_conflict="stripe_subscription_id").execute()
+            return
+        existant = (
+            client.table("subscriptions")
+            .select("id")
+            .eq("stripe_subscription_id", identifiant)
+            .limit(1)
+            .execute()
+        )
+        if not existant.data:
+            raise HTTPException(status_code=400, detail="Abonnement Stripe sans utilisateur associé.")
+        client.table("subscriptions").update({
+            "stripe_customer_id": champs["stripe_customer_id"],
+            "status": champs["status"],
+            "current_period_end": champs["current_period_end"],
+        }).eq("stripe_subscription_id", identifiant).execute()
+    except HTTPException:
+        raise
+    except Exception:
+        print("-> Ecriture de l'abonnement impossible", flush=True)
+        raise HTTPException(status_code=500, detail="Enregistrement de l'abonnement impossible.")
+
 @app.get("/")
 def home():
     return {"message": "Serveur Flash WFM operationnel."}
 
+@app.post("/webhook/stripe")
+async def webhook_stripe(request: Request):
+    corps = await request.body()
+    evenement = verifier_signature_stripe(corps, request.headers.get("stripe-signature"))
+    type_evenement = evenement.get("type")
+    if type_evenement in {
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }:
+        enregistrer_abonnement(
+            evenement["data"]["object"],
+            supprime=type_evenement == "customer.subscription.deleted",
+        )
+        print(f"-> Abonnement Stripe enregistre : {type_evenement}", flush=True)
+    return {"recu": True}
+
+@app.post("/create-checkout-session")
+def creer_session_checkout(authorization: str | None = Header(default=None)):
+    user_id = identite_depuis_authorization(authorization)
+    cle = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+    prix = os.environ.get("STRIPE_PRICE_ID", "").strip()
+    front = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+    if not cle or not prix or not front.startswith(("http://", "https://")):
+        print("-> Configuration Stripe incomplete", flush=True)
+        raise HTTPException(status_code=503, detail="Paiement indisponible.")
+    stripe.api_key = cle
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": prix, "quantity": 1}],
+            success_url=f"{front}/?success=true",
+            cancel_url=f"{front}/?canceled=true",
+            client_reference_id=user_id,
+            metadata={"user_id": user_id},
+            subscription_data={"metadata": {"user_id": user_id}},
+        )
+    except stripe.StripeError:
+        print("-> Creation de la session Stripe impossible", flush=True)
+        raise HTTPException(status_code=500, detail="Session de paiement indisponible.")
+    url = getattr(session, "url", None)
+    if not url and hasattr(session, "to_dict"):
+        url = session.to_dict().get("url")
+    if not url:
+        raise HTTPException(status_code=500, detail="Session de paiement indisponible.")
+    return {"url": url}
+
 @app.post("/prevision_plan")
 def generer_plan_production(requete: PrevisionRequest, authorization: str | None = Header(default=None)):
+    if len(requete.donnees) > MAX_LIGNES_HISTORIQUE:
+        raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 000 lignes max)")
     user_id = identite_depuis_authorization(authorization)
     profil = lire_profil(user_id)
-    verifier_droit_modele(requete.modele, profil)
+    verifier_droit_modele(requete.modele, profil, abonnement_pro_actif(user_id))
     print("\n" + "="*40, flush=True)
     print("NOUVELLE DEMANDE DE PREVISION", flush=True)
     print(f"-> Modele demande : '{requete.modele}'", flush=True)
@@ -342,77 +615,40 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
 
     try:
         if "holt" in modele_propre:
-            print("-> Lancement de l'algorithme : Holt-Winters", flush=True)
-            historique = df.set_index('date')['volume'].astype(float).sort_index()
-            historique = historique[~historique.index.duplicated(keep='last')].asfreq('D')
-            historique = historique.interpolate(limit_direction='both')
-            if len(historique) < 2 * SAISON_ANNUELLE:
-                raise ValueError("deux cycles de 365 jours necessaires")
-            fit = ExponentialSmoothing(
-                historique.to_numpy(dtype=float),
-                trend='add',
-                seasonal='add',
-                seasonal_periods=SAISON_ANNUELLE,
-                initialization_method="heuristic"
-            ).fit()
-            dernier = historique.index.max()
-            horizon = pd.DatetimeIndex(dates_futur)
-            pas = max(0, (horizon.max().normalize() - dernier.normalize()).days)
-            ajustees = pd.Series(fit.fittedvalues, index=historique.index)
-            if pas:
-                suite_index = pd.date_range(dernier + pd.Timedelta(days=1), periods=pas, freq='D')
-                suite = pd.Series(fit.forecast(pas), index=suite_index)
-                complet = pd.concat([ajustees, suite])
-            else:
-                complet = ajustees
-            complet = complet[~complet.index.duplicated(keep='last')].reindex(horizon)
-            complet = complet.interpolate(limit_direction='both')
-            previsions_brutes = complet.tolist()
-            nom_modele_final = "Holt-Winters"
-            
+            try:
+                previsions_brutes, nom_modele_final = entrainer_holt(df, dates_futur)
+            except MemoryError as exc:
+                lever_si_memoire(exc)
+            except Exception as exc:
+                lever_si_memoire(exc)
+                raise
         elif "light" in modele_propre or "lgb" in modele_propre:
-            print("-> Lancement de l'algorithme : LightGBM Boosté", flush=True)
-            
-            df['jour_semaine'] = df['date'].dt.dayofweek
-            df['mois'] = df['date'].dt.month
-            moyenne_globale = df['volume'].mean()
-            
-            facteur_semaine = (df.groupby('jour_semaine')['volume'].mean() / moyenne_globale).to_dict()
-            facteur_mois = (df.groupby('mois')['volume'].mean() / moyenne_globale).to_dict()
-            
-            X = features_temporelles(df['date'])
-            y = df['volume']
-            print(f"-> Features NaN : {int(X[FEATURES_TEMPORELLES].isna().sum().sum())}", flush=True)
-            
-            model = lgb.LGBMRegressor(n_estimators=100, learning_rate=0.05, verbose=-1)
-            model.fit(X[FEATURES_TEMPORELLES], y, categorical_feature=['month_tier'])
-            
-            X_futur = features_temporelles(dates_futur)
-            preds_brutes = model.predict(X_futur[FEATURES_TEMPORELLES])
-            
-            previsions_brutes = []
-            for i, jour in enumerate(dates_futur):
-                val_base = preds_brutes[i]
-                coef_s = facteur_semaine.get(int(jour.dayofweek), 1.0)
-                coef_m = facteur_mois.get(int(jour.month), 1.0)
-                previsions_brutes.append(val_base * 0.5 + (moyenne_globale * coef_s * coef_m) * 0.5)
-                
-            nom_modele_final = "LightGBM"
-            
-        else: 
+            try:
+                previsions_brutes, nom_modele_final = entrainer_lightgbm(df, dates_futur)
+            except MemoryError as exc:
+                lever_si_memoire(exc)
+            except Exception as exc:
+                lever_si_memoire(exc)
+                raise
+        else:
             print("-> Modele Moyenne Saisonnière intra-semaine", flush=True)
             df['jour_semaine'] = df['date'].dt.dayofweek
             moyennes_jours = df.groupby('jour_semaine')['volume'].mean().to_dict()
             moyenne_globale = df['volume'].mean()
-            
+
             previsions_brutes = []
             for jour in dates_futur:
                 val = moyennes_jours.get(jour.dayofweek, moyenne_globale)
                 previsions_brutes.append(val)
-                
+
             nom_modele_final = "Moyenne Saisonnière"
 
+    except HTTPException:
+        raise
+    except MemoryError as exc:
+        lever_si_memoire(exc)
     except Exception as e:
+        lever_si_memoire(e)
         if "holt" in modele_propre:
             print(f"-> Holt-Winters repli double saisonnalite ({e})", flush=True)
             previsions_brutes = prevoir_double_saisonnalite(df['date'], df['volume'], dates_futur)
