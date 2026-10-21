@@ -46,6 +46,27 @@ function HeaderLogo({ subtitle }: { subtitle?: string }) {
   );
 }
 
+function ChampParam({ label, info, value, onChangeText }: { label: string; info: string; value: string; onChangeText: (texte: string) => void }) {
+  return (
+    <View style={styles.paramField}>
+      <View style={styles.labelRow}>
+        <Text style={styles.labelInline}>{label}</Text>
+        <View
+          accessibilityLabel={info}
+          ref={Platform.OS === 'web' ? (node) => {
+            const element = node as unknown as { setAttribute?: (nom: string, valeur: string) => void } | null;
+            element?.setAttribute?.('title', info);
+          } : undefined}
+          style={[styles.infoIcon, Platform.OS === 'web' ? ({ cursor: 'help' } as never) : null]}
+        >
+          <Ionicons name="information-circle-outline" size={16} color="#687581" />
+        </View>
+      </View>
+      <TextInput style={styles.paramInput} value={value} onChangeText={onChangeText} keyboardType="numeric" />
+    </View>
+  );
+}
+
 function HorizontalPlan({ plan }: { plan: PlanLigne[] }) {
   useEffect(() => {
     masquerBarreDefilement();
@@ -480,53 +501,22 @@ export default function FlashWFM() {
                   <Text style={[styles.modelBtnText, typeFlux === 'froid' && styles.modelBtnTextActive]}>📩 Flux Froid (Ticketing / Mails)</Text>
                 </TouchableOpacity>
               </View>
-              <View style={styles.paramGrid}>
-                <View style={styles.paramField}>
-                  <Text style={styles.label}>AHT (secondes)</Text>
-                  <TextInput style={styles.input} value={aht} onChangeText={setAht} keyboardType="numeric" />
-                  <Text style={styles.hint}>Durée moyenne de traitement (conversation + post-appel).</Text>
-                </View>
+              <View style={[styles.paramGrid, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' } as never) : null]}>
+                <ChampParam label="DMT / AHT (s)" info="Durée moyenne de traitement en secondes (conversation + post-appel)." value={aht} onChangeText={setAht} />
                 {typeFlux === 'froid' ? (
                   <>
-                    <View style={styles.paramField}>
-                      <Text style={styles.label}>Engagement de réponse (SLA en jours ouvrés)</Text>
-                      <TextInput style={styles.input} value={delaiSlaJours} onChangeText={setDelaiSlaJours} keyboardType="numeric" />
-                      <Text style={styles.hint}>Ex : 1 jour = traitement le jour même (8h ouvrées), 2 jours = lissage sous 48h.</Text>
-                    </View>
-                    <View style={styles.paramField}>
-                      <Text style={styles.label}>Backlog initial (tickets en attente)</Text>
-                      <TextInput style={styles.input} value={backlog} onChangeText={setBacklog} keyboardType="numeric" />
-                      <Text style={styles.hint}>Tickets déjà en file d'attente au démarrage du plan.</Text>
-                    </View>
-                    <View style={styles.paramField}>
-                      <Text style={styles.label}>Taux d'occupation cible (%)</Text>
-                      <TextInput style={styles.input} value={tauxOccupation} onChangeText={setTauxOccupation} keyboardType="numeric" />
-                    </View>
+                    <ChampParam label="SLA (jours)" info="Délai cible en jours ouvrés (ex : 1 jour = traitement le jour même)." value={delaiSlaJours} onChangeText={setDelaiSlaJours} />
+                    <ChampParam label="Backlog (tickets)" info="Nombre de tickets déjà en attente au démarrage." value={backlog} onChangeText={setBacklog} />
+                    <ChampParam label="Occupation (%)" info="Taux d'occupation cible des agents en production." value={tauxOccupation} onChangeText={setTauxOccupation} />
                   </>
                 ) : (
                   <>
-                    <View style={styles.paramField}>
-                      <Text style={styles.label}>SLA cible (%)</Text>
-                      <TextInput style={styles.input} value={sla} onChangeText={setSla} keyboardType="numeric" />
-                      <Text style={styles.hint}>Part des demandes traitées dans le délai cible.</Text>
-                    </View>
-                    <View style={styles.paramField}>
-                      <Text style={styles.label}>Temps cible SLA (secondes)</Text>
-                      <TextInput style={styles.input} value={tempsCible} onChangeText={setTempsCible} keyboardType="numeric" />
-                      <Text style={styles.hint}>Délai maximal de prise en charge (ex : 20s).</Text>
-                    </View>
+                    <ChampParam label="SLA cible (%)" info="Part des demandes traitées dans le délai cible." value={sla} onChangeText={setSla} />
+                    <ChampParam label="Temps cible SLA (secondes)" info="Délai maximal de prise en charge (ex : 20s)." value={tempsCible} onChangeText={setTempsCible} />
                   </>
                 )}
-                <View style={styles.paramField}>
-                  <Text style={styles.label}>Shrinkage (%)</Text>
-                  <TextInput style={styles.input} value={shrinkage} onChangeText={setShrinkage} keyboardType="numeric" />
-                  <Text style={styles.hint}>Inactivité planifiée et imprévue (pauses, formations, congés).</Text>
-                </View>
-                <View style={styles.paramField}>
-                  <Text style={styles.label}>Heures d'ouverture / jour</Text>
-                  <TextInput style={styles.input} value={heuresOuverture} onChangeText={setHeuresOuverture} keyboardType="numeric" />
-                  <Text style={styles.hint}>Amplitude horaire d'ouverture du service.</Text>
-                </View>
+                <ChampParam label="Shrinkage (%)" info="Pauses, formations, congés et absentéisme." value={shrinkage} onChangeText={setShrinkage} />
+                <ChampParam label="Amplitude (h/j)" info="Nombre d'heures d'ouverture du service par jour." value={heuresOuverture} onChangeText={setHeuresOuverture} />
               </View>
             </View>
 
@@ -750,8 +740,12 @@ const styles = StyleSheet.create({
   planHeaderTitle: { fontSize: 18, color: '#0F2D46', fontWeight: 'bold' },
   exportBtn: { backgroundColor: '#F4C430', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
   exportBtnText: { color: '#0F2D46', fontWeight: 'bold', fontSize: 14 },
-  paramGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, width: '100%' },
-  paramField: { flexGrow: 1, flexShrink: 1, flexBasis: 180, minWidth: 140 },
+  paramGrid: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, width: '100%' },
+  paramField: { flexGrow: 1, flexShrink: 1, flexBasis: 180, minWidth: 150, width: '100%' },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5, minHeight: 20 },
+  labelInline: { color: '#0F2D46', fontWeight: 'bold' },
+  infoIcon: { width: 16, height: 16 },
+  paramInput: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', height: 46, paddingVertical: 0, paddingHorizontal: 12, borderRadius: 8, fontSize: 16, color: '#0F2D46', width: '100%' },
   modelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, width: '100%' },
   modelBtnDash: { flexGrow: 1, flexShrink: 1, flexBasis: 220, minWidth: 200, marginBottom: 0 },
   hTable: { width: '100%', borderWidth: 1, borderColor: '#E6E9EE', borderRadius: 8, overflow: 'hidden' },
