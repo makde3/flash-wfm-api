@@ -243,6 +243,8 @@ export default function FlashWFM() {
   const [sla, setSla] = useState('80');
   const [tempsCible, setTempsCible] = useState('20');
   const [shrinkage, setShrinkage] = useState('25');
+  const [typeFlux, setTypeFlux] = useState<'chaud' | 'froid'>('chaud');
+  const [backlog, setBacklog] = useState('0');
   
   const [showResult, setShowResult] = useState(false);
   const [etpResult, setEtpResult] = useState<number | null>(null);
@@ -342,6 +344,8 @@ export default function FlashWFM() {
           temps_cible: parseInt(tempsCible, 10) || 20,
           shrinkage: parseInt(shrinkage, 10) || 25,
           heures_ouverture: parseFloat(heuresOuverture) || 8,
+          type_flux: typeFlux,
+          backlog: parseInt(backlog, 10) || 0,
         },
       }, 60000);
 
@@ -458,22 +462,46 @@ export default function FlashWFM() {
 
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>Simulation Erlang</Text>
+              <View style={styles.horizonRow}>
+                <TouchableOpacity
+                  style={[styles.horizonBtn, typeFlux === 'chaud' && styles.modelBtnActive]}
+                  onPress={() => { setTypeFlux('chaud'); setPlan(null); }}
+                >
+                  <Text style={[styles.modelBtnText, typeFlux === 'chaud' && styles.modelBtnTextActive]}>🔥 Flux Chaud (Téléphonie / Chat)</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.horizonBtn, typeFlux === 'froid' && styles.modelBtnActive]}
+                  onPress={() => { setTypeFlux('froid'); setPlan(null); }}
+                >
+                  <Text style={[styles.modelBtnText, typeFlux === 'froid' && styles.modelBtnTextActive]}>📩 Flux Froid (Ticketing / Mails)</Text>
+                </TouchableOpacity>
+              </View>
               <View style={styles.paramGrid}>
                 <View style={styles.paramField}>
                   <Text style={styles.label}>AHT (secondes)</Text>
                   <TextInput style={styles.input} value={aht} onChangeText={setAht} keyboardType="numeric" />
                   <Text style={styles.hint}>Durée moyenne de traitement (conversation + post-appel).</Text>
                 </View>
-                <View style={styles.paramField}>
-                  <Text style={styles.label}>SLA cible (%)</Text>
-                  <TextInput style={styles.input} value={sla} onChangeText={setSla} keyboardType="numeric" />
-                  <Text style={styles.hint}>Part des demandes traitées dans le délai cible.</Text>
-                </View>
-                <View style={styles.paramField}>
-                  <Text style={styles.label}>Temps cible SLA (secondes)</Text>
-                  <TextInput style={styles.input} value={tempsCible} onChangeText={setTempsCible} keyboardType="numeric" />
-                  <Text style={styles.hint}>Délai maximal de prise en charge (ex : 20s).</Text>
-                </View>
+                {typeFlux === 'froid' ? (
+                  <View style={styles.paramField}>
+                    <Text style={styles.label}>Backlog initial (tickets en attente)</Text>
+                    <TextInput style={styles.input} value={backlog} onChangeText={setBacklog} keyboardType="numeric" />
+                    <Text style={styles.hint}>Tickets déjà en file d'attente au démarrage du plan.</Text>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.paramField}>
+                      <Text style={styles.label}>SLA cible (%)</Text>
+                      <TextInput style={styles.input} value={sla} onChangeText={setSla} keyboardType="numeric" />
+                      <Text style={styles.hint}>Part des demandes traitées dans le délai cible.</Text>
+                    </View>
+                    <View style={styles.paramField}>
+                      <Text style={styles.label}>Temps cible SLA (secondes)</Text>
+                      <TextInput style={styles.input} value={tempsCible} onChangeText={setTempsCible} keyboardType="numeric" />
+                      <Text style={styles.hint}>Délai maximal de prise en charge (ex : 20s).</Text>
+                    </View>
+                  </>
+                )}
                 <View style={styles.paramField}>
                   <Text style={styles.label}>Shrinkage (%)</Text>
                   <TextInput style={styles.input} value={shrinkage} onChangeText={setShrinkage} keyboardType="numeric" />

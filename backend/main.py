@@ -27,6 +27,8 @@ class ErlangRequest(BaseModel):
     temps_cible: int = 20
     shrinkage: int
     heures_ouverture: float = 8.0
+    type_flux: str = "chaud"
+    backlog: int = 0
 
 class PrevisionRequest(BaseModel):
     modele: str
@@ -58,6 +60,11 @@ def calculer_etp_pour_volume(volume, req: ErlangRequest):
         agents += 1
         
     return math.ceil(agents / (1 - (req.shrinkage / 100.0)))
+
+def calculer_etp_ticketing(volume, req: ErlangRequest):
+    charge = (volume * (req.aht / 3600.0)) + req.backlog
+    capacite = req.heures_ouverture * (1 - req.shrinkage / 100.0)
+    return math.ceil(charge / capacite)
 
 SAISON_ANNUELLE = 365
 FEATURES_TEMPORELLES = [
@@ -321,11 +328,16 @@ def generer_plan_production(requete: PrevisionRequest):
         print("-> Prevision plate : l'historique ne distingue pas les periodes, pas un repli NaN.", flush=True)
 
     plan_production = []
+    calculer_etp = (
+        calculer_etp_ticketing
+        if requete.parametres_erlang.type_flux == "froid"
+        else calculer_etp_pour_volume
+    )
     if est_court_terme:
         date_courante = dates_futur[0].to_pydatetime()
         for vol in previsions_brutes:
             vol_propre = max(1, int(vol))
-            etp_requis = calculer_etp_pour_volume(vol_propre, requete.parametres_erlang)
+            etp_requis = calculer_etp(vol_propre, requete.parametres_erlang)
             plan_production.append({
                 "date": date_courante.strftime("%d/%m/%Y"),
                 "volume_prevu": vol_propre,
@@ -340,7 +352,7 @@ def generer_plan_production(requete: PrevisionRequest):
             vol_mensuel = sum(previsions_brutes[debut:fin])
             vol_mensuel_propre = max(1, int(vol_mensuel))
             vol_journalier_moyen = vol_mensuel_propre / 30.0
-            etp_requis = calculer_etp_pour_volume(vol_journalier_moyen, requete.parametres_erlang)
+            etp_requis = calculer_etp(vol_journalier_moyen, requete.parametres_erlang)
             mois = date_courante.month
             annee = date_courante.year
             plan_production.append({
