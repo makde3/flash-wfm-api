@@ -1,14 +1,17 @@
 import math
+import os
 import sys
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from fastapi import FastAPI
+from datetime import datetime, timedelta, timezone
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import jwt
 import lightgbm as lgb
+from supabase import create_client
 
 app = FastAPI()
 
@@ -19,6 +22,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+ESSAI_JOURS = 3
+_clients_jwks: Dict[str, jwt.PyJWKClient] = {}
+_client_service = None
 
 class ErlangRequest(BaseModel):
     volume_horaire: float
@@ -48,24 +55,25 @@ def calcul_erlang_c(agents, traffic):
     return erlang_c
 
 def calculer_etp_pour_volume(volume, req: ErlangRequest):
-    volume_horaire_estime = volume / req.heures_ouverture 
+    if req.aht <= 0 or req.heures_ouverture <= 0 or req.shrinkage >= 100:
+        return 1
+
+    sla_cible = 99.9 if req.sla_cible >= 100 else req.sla_cible
+    volume_horaire_estime = volume / req.heures_ouverture
     traffic = (volume_horaire_estime * req.aht) / 3600.0
-    agents = math.ceil(traffic)
-    if agents < 1:
-        agents = 1
-        
-    while True:
+
+    for agents in range(1, 1001):
         pw = calcul_erlang_c(agents, traffic)
         sla_calcule = 1 - pw * math.exp(-(agents - traffic) * (req.temps_cible / req.aht))
-        if sla_calcule >= (req.sla_cible / 100.0):
-            break
-        agents += 1
-        
-    return math.ceil(agents / (1 - (req.shrinkage / 100.0)))
+        if sla_calcule >= (sla_cible / 100.0):
+            return math.ceil(agents / (1 - (req.shrinkage / 100.0)))
 
-def calculer_etp_ticketing(volume, req: ErlangRequest):
+    return 1000
+
+def calculer_etp_ticketing(volume, req: ErlangRequest, inclure_backlog: bool = False):
     aht_heures = req.aht / 3600.0
-    charge_heures = (volume + req.backlog) * aht_heures
+    backlog = req.backlog if inclure_backlog else 0
+    charge_heures = (volume + backlog) * aht_heures
 
     capacite_agent_jour = (
         req.heures_ouverture
@@ -78,6 +86,11 @@ def calculer_etp_ticketing(volume, req: ErlangRequest):
     sla_jours = max(1, req.delai_sla_jours)
     etp = math.ceil(charge_heures / (capacite_agent_jour * sla_jours))
     return max(1, etp)
+
+def volume_retenu(valeur):
+    if valeur <= 0:
+        return 0
+    return int(valeur)
 
 SAISON_ANNUELLE = 365
 FEATURES_TEMPORELLES = [
@@ -190,12 +203,101 @@ def prevoir_double_saisonnalite(dates, volumes, dates_futur):
         previsions.append(float(valeur))
     return previsions
 
+def modele_avance(modele: str) -> bool:
+    nom = modele.strip().lower()
+    return "holt" in nom or "light" in nom or "lgb" in nom
+
+def essai_expire(created_at) -> bool:
+    if not created_at:
+        return True
+    try:
+        debut = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if debut.tzinfo is None:
+        debut = debut.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= debut + timedelta(days=ESSAI_JOURS)
+
+def _decoder_jwt(token: str, cle, algorithmes):
+    options = {"require": ["exp", "sub"]}
+    arguments = {
+        "algorithms": algorithmes,
+        "audience": "authenticated",
+        "options": options,
+    }
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if url:
+        arguments["issuer"] = f"{url}/auth/v1"
+    return jwt.decode(token, cle, **arguments)
+
+def identite_depuis_authorization(authorization: str | None) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Token absent ou invalide.")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Token absent ou invalide.")
+
+    secret = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    payload = None
+    if secret:
+        try:
+            payload = _decoder_jwt(token, secret, ["HS256"])
+        except jwt.PyJWTError:
+            payload = None
+    if payload is None and url:
+        try:
+            if url not in _clients_jwks:
+                _clients_jwks[url] = jwt.PyJWKClient(f"{url}/auth/v1/.well-known/jwks.json")
+            cle = _clients_jwks[url].get_signing_key_from_jwt(token)
+            payload = _decoder_jwt(token, cle.key, ["RS256", "ES256"])
+        except Exception:
+            payload = None
+    if not payload or payload.get("role") != "authenticated" or not payload.get("sub"):
+        raise HTTPException(status_code=401, detail="Token absent ou invalide.")
+    return str(payload["sub"])
+
+def lire_profil(user_id: str) -> dict:
+    global _client_service
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    cle = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if not url or not cle:
+        raise HTTPException(status_code=503, detail="Vérification des droits indisponible.")
+    if _client_service is None:
+        _client_service = create_client(url, cle)
+    try:
+        reponse = (
+            _client_service.table("profiles")
+            .select("plan, created_at")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        print("-> Lecture du profil impossible", flush=True)
+        raise HTTPException(status_code=403, detail="Droits utilisateur introuvables.")
+    lignes = reponse.data or []
+    if not lignes:
+        raise HTTPException(status_code=403, detail="Droits utilisateur introuvables.")
+    return lignes[0]
+
+def verifier_droit_modele(modele: str, profil: dict) -> None:
+    if str(profil.get("plan") or "").strip() == "pro":
+        return
+    if modele_avance(modele):
+        raise HTTPException(status_code=403, detail="Ce modèle nécessite un abonnement Pro.")
+    if essai_expire(profil.get("created_at")):
+        raise HTTPException(status_code=403, detail="L'essai gratuit est expiré.")
+
 @app.get("/")
 def home():
     return {"message": "Serveur Flash WFM operationnel."}
 
 @app.post("/prevision_plan")
-def generer_plan_production(requete: PrevisionRequest):
+def generer_plan_production(requete: PrevisionRequest, authorization: str | None = Header(default=None)):
+    user_id = identite_depuis_authorization(authorization)
+    profil = lire_profil(user_id)
+    verifier_droit_modele(requete.modele, profil)
     print("\n" + "="*40, flush=True)
     print("NOUVELLE DEMANDE DE PREVISION", flush=True)
     print(f"-> Modele demande : '{requete.modele}'", flush=True)
@@ -341,16 +443,18 @@ def generer_plan_production(requete: PrevisionRequest):
         print("-> Prevision plate : l'historique ne distingue pas les periodes, pas un repli NaN.", flush=True)
 
     plan_production = []
-    calculer_etp = (
-        calculer_etp_ticketing
-        if requete.parametres_erlang.type_flux == "froid"
-        else calculer_etp_pour_volume
-    )
+    flux_froid = requete.parametres_erlang.type_flux == "froid"
+
+    def etp_requis_pour(volume, inclure_backlog):
+        if flux_froid:
+            return calculer_etp_ticketing(volume, requete.parametres_erlang, inclure_backlog=inclure_backlog)
+        return calculer_etp_pour_volume(volume, requete.parametres_erlang)
+
     if est_court_terme:
         date_courante = dates_futur[0].to_pydatetime()
-        for vol in previsions_brutes:
-            vol_propre = max(1, int(vol))
-            etp_requis = calculer_etp(vol_propre, requete.parametres_erlang)
+        for index, vol in enumerate(previsions_brutes):
+            vol_propre = volume_retenu(vol)
+            etp_requis = etp_requis_pour(vol_propre, inclure_backlog=index == 0)
             plan_production.append({
                 "date": date_courante.strftime("%d/%m/%Y"),
                 "volume_prevu": vol_propre,
@@ -363,9 +467,9 @@ def generer_plan_production(requete: PrevisionRequest):
             debut = i * 30
             fin = (i + 1) * 30
             vol_mensuel = sum(previsions_brutes[debut:fin])
-            vol_mensuel_propre = max(1, int(vol_mensuel))
+            vol_mensuel_propre = volume_retenu(vol_mensuel)
             vol_journalier_moyen = vol_mensuel_propre / 30.0
-            etp_requis = calculer_etp(vol_journalier_moyen, requete.parametres_erlang)
+            etp_requis = etp_requis_pour(vol_journalier_moyen, inclure_backlog=i == 0)
             mois = date_courante.month
             annee = date_courante.year
             plan_production.append({

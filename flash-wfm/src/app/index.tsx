@@ -124,19 +124,32 @@ type ExportPlan = {
   heuresOuverture: number;
   modele: string;
   horizonLabel: string;
+  typeFlux: 'chaud' | 'froid';
+  delaiSlaJours: number;
+  tauxOccupation: number;
 };
 
-function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel }: ExportPlan) {
+function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation }: ExportPlan) {
   const volumeTotal = plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
   const etpMoyen = plan.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / plan.length;
+  const fluxFroid = typeFlux === 'froid';
+  const libelleDelai = fluxFroid ? 'Délai SLA (jours)' : 'SLA cible (%)';
+  const valeurDelai = fluxFroid ? delaiSlaJours : sla;
   const lignes: (string | number)[][] = [
     ['Flash WFM — Plan de production'],
     ['Mak Consult'],
     [],
     ['Paramètre', 'Valeur'],
     ['AHT (secondes)', aht],
-    ['SLA cible (%)', sla],
-    ['Temps cible SLA (secondes)', tempsCible],
+    ...(fluxFroid
+      ? [
+          ['Délai SLA (jours)', delaiSlaJours],
+          ['Occupation (%)', tauxOccupation],
+        ]
+      : [
+          ['SLA cible (%)', sla],
+          ['Temps cible SLA (secondes)', tempsCible],
+        ]),
     ['Shrinkage (%)', shrinkage],
     ["Heures d'ouverture", heuresOuverture],
     ['Modèle', modele],
@@ -144,8 +157,8 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
     ['Volume total', volumeTotal],
     ['ETP moyen', Number(etpMoyen.toFixed(2))],
     [],
-    ['Période', 'Volume prévu', 'ETP requis', 'SLA cible (%)'],
-    ...plan.map((ligne) => [ligne.date, ligne.volume_prevu, ligne.etp_moyen_requis, sla]),
+    ['Période', 'Volume prévu', 'ETP requis', libelleDelai],
+    ...plan.map((ligne) => [ligne.date, ligne.volume_prevu, ligne.etp_moyen_requis, valeurDelai]),
   ];
   const enteteTableau = 14;
   const feuille = XLSXStyle.utils.aoa_to_sheet(lignes);
@@ -225,7 +238,23 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
   }
 }
 
-async function postApi(path: string, body: unknown, timeoutMs = 5000) {
+class ErreurApi extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ErreurApi';
+    this.status = status;
+  }
+}
+
+function messageHttp(status: number, detail: string) {
+  if (detail) return detail;
+  if (status === 401) return "Vous n'êtes pas authentifié. Veuillez vous reconnecter.";
+  if (status === 403) return "Accès refusé : abonnement Pro requis ou essai gratuit expiré.";
+  return `Erreur HTTP ${status}`;
+}
+
+async function postApi(path: string, body: unknown, timeoutMs = 5000, token?: string) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -234,16 +263,25 @@ async function postApi(path: string, body: unknown, timeoutMs = 5000) {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    const data = await response.json();
-    if (!response.ok) {
-      const detail = typeof data?.detail === 'string' ? data.detail : data?.message;
-      throw new Error(detail || `HTTP ${response.status}`);
+    const texte = await response.text();
+    let data: any = null;
+    if (texte) {
+      try {
+        data = JSON.parse(texte);
+      } catch {
+        data = null;
+      }
     }
-    return data;
+    if (!response.ok) {
+      const detail = typeof data?.detail === 'string' ? data.detail : typeof data?.message === 'string' ? data.message : '';
+      throw new ErreurApi(response.status, messageHttp(response.status, detail));
+    }
+    return data ?? {};
   } finally {
     clearTimeout(timer);
   }
@@ -268,10 +306,6 @@ export default function FlashWFM() {
   const [backlog, setBacklog] = useState('0');
   const [delaiSlaJours, setDelaiSlaJours] = useState('1');
   const [tauxOccupation, setTauxOccupation] = useState('85');
-  
-  const [showResult, setShowResult] = useState(false);
-  const [etpResult, setEtpResult] = useState<number | null>(null);
-  const [predictedVolume, setPredictedVolume] = useState<number>(150);
   const [abonnement, setAbonnement] = useState<'free' | 'pro'>('free');
   const [finEssai, setFinEssai] = useState<number | null>(null);
   const [modalePro, setModalePro] = useState(false);
@@ -344,6 +378,12 @@ export default function FlashWFM() {
     setLoading(true);
     setPlan(null);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        alert("Session expirée. Veuillez vous reconnecter.");
+        return;
+      }
       const donnees = dataPreview.map((row) => {
         const values = Object.values(row ?? {});
         return {
@@ -372,7 +412,7 @@ export default function FlashWFM() {
           delai_sla_jours: parseInt(delaiSlaJours, 10) || 1,
           taux_occupation: parseInt(tauxOccupation, 10) || 85,
         },
-      }, 60000);
+      }, 60000, token);
 
       if (data.statut === 'succès' && Array.isArray(data.plan)) {
         setPlan(data.plan);
@@ -381,7 +421,15 @@ export default function FlashWFM() {
       }
     } catch (error) {
       console.error(error);
-      alert("Connexion au serveur backend impossible. Veuillez vérifier que l'API est active.");
+      if (error instanceof ErreurApi && (error.status === 401 || error.status === 403)) {
+        alert(error.message);
+      } else if (error instanceof Error && error.name === 'AbortError') {
+        alert("Le serveur met trop de temps à répondre. Veuillez réessayer.");
+      } else if (error instanceof ErreurApi || (error instanceof Error && error.name !== 'TypeError')) {
+        alert(error.message);
+      } else {
+        alert("Connexion au serveur backend impossible. Veuillez vérifier que l'API est active.");
+      }
     } finally {
       setLoading(false);
     }
@@ -402,78 +450,11 @@ export default function FlashWFM() {
       heuresOuverture: parseFloat(heuresOuverture) || 8,
       modele: selectedModel ?? '',
       horizonLabel: horizon === 'court_terme' ? 'Court terme' : 'Long terme',
+      typeFlux,
+      delaiSlaJours: parseInt(delaiSlaJours, 10) || 1,
+      tauxOccupation: parseInt(tauxOccupation, 10) || 85,
     });
   };
-
-  const calculateFTE = async () => {
-    try {
-      const heures = parseFloat(heuresOuverture) || 8;
-      const volumeHoraireMoyen = predictedVolume / heures;
-
-      const data = await postApi('/erlang', {
-        volume_horaire: volumeHoraireMoyen,
-        aht: parseInt(aht, 10) || 360,
-        sla_cible: parseInt(sla, 10) || 80,
-        temps_cible: parseInt(tempsCible, 10) || 20,
-        shrinkage: parseInt(shrinkage, 10) || 25,
-      });
-      setEtpResult(data.etp_final_avec_shrinkage);
-      setShowResult(true);
-    } catch (error) {
-      alert("L'API Erlang ne répond pas.");
-      console.error(error);
-    }
-  };
-
-  if (currentStep === 3) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <ScrollView contentContainerStyle={styles.scrollCenter}>
-          <HeaderLogo subtitle="DATA · MÉTIER · PERFORMANCE" />
-          <View style={styles.card}>
-            <TouchableOpacity style={styles.backBtn} onPress={() => {setCurrentStep(2); setShowResult(false);}}>
-              <Text style={styles.backBtnText}>← Retour</Text>
-            </TouchableOpacity>
-            
-            <Text style={styles.stepText}>Étape 3 : Paramétrage Erlang C</Text>
-            <Text style={styles.infoTextDark}>Volume prévisionnel : {predictedVolume} contacts / jour.</Text>
-            
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Nombre d'heures réelles d'ouverture / jour (hors pauses)</Text>
-              <TextInput style={styles.input} value={heuresOuverture} onChangeText={setHeuresOuverture} keyboardType="numeric" />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>AHT / DMT (secondes)</Text>
-              <TextInput style={styles.input} value={aht} onChangeText={setAht} keyboardType="numeric" />
-            </View>
-            
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Objectif SLA (%)</Text>
-              <TextInput style={styles.input} value={sla} onChangeText={setSla} keyboardType="numeric" />
-            </View>
-            
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Shrinkage / Absentéisme (%)</Text>
-              <TextInput style={styles.input} value={shrinkage} onChangeText={setShrinkage} keyboardType="numeric" />
-            </View>
-            
-            <TouchableOpacity style={styles.generateBtn} onPress={calculateFTE}>
-              <Text style={styles.generateBtnText}>Calculer le besoin en ETP</Text>
-            </TouchableOpacity>
-            
-            {showResult && etpResult && (
-              <View style={styles.finalResultBox}>
-                <Text style={styles.finalResultTitle}>Staffing Requis Estimé</Text>
-                <Text style={styles.finalResultNumber}>{etpResult} ETP</Text>
-                <Text style={styles.finalResultSub}>En moyenne pour respecter un objectif de {sla}% de SLA.</Text>
-              </View>
-            )}
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
 
   if (currentStep === 2) {
     return (
@@ -726,7 +707,6 @@ const styles = StyleSheet.create({
   nextBtnText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
   backBtn: { alignSelf: 'flex-start', paddingBottom: 15 },
   backBtnText: { color: '#687581', fontWeight: 'bold', fontSize: 16 },
-  infoTextDark: { color: '#687581', marginBottom: 20, fontStyle: 'italic', textAlign: 'center', fontWeight: 'bold' },
   modelBtn: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', padding: 15, borderRadius: 8, width: '100%', marginBottom: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   modelBtnLocked: { opacity: 0.55 },
   proBadge: { backgroundColor: '#F4C430', color: '#0F2D46', fontSize: 11, fontWeight: '800', overflow: 'hidden', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
@@ -766,12 +746,5 @@ const styles = StyleSheet.create({
   hLabelHead: { backgroundColor: '#0F2D46', color: '#F4C430' },
   hHeadCell: { width: 76, paddingVertical: 12, paddingHorizontal: 6, textAlign: 'center', color: '#F4C430', fontWeight: 'bold', fontSize: 13, backgroundColor: '#0F2D46' },
   hCell: { width: 76, paddingVertical: 12, paddingHorizontal: 6, textAlign: 'center', color: '#0F2D46', fontSize: 14 },
-  inputGroup: { width: '100%', marginBottom: 15 },
-  label: { color: '#0F2D46', fontWeight: 'bold', marginBottom: 5 },
   hint: { color: '#9AA3AD', fontSize: 12, lineHeight: 16, marginTop: 6 },
-  input: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', padding: 12, borderRadius: 8, fontSize: 16, color: '#0F2D46' },
-  finalResultBox: { marginTop: 25, backgroundColor: '#0F2D46', padding: 20, borderRadius: 8, width: '100%', alignItems: 'center' },
-  finalResultTitle: { color: '#F4C430', fontSize: 16, fontWeight: 'bold', marginBottom: 10 },
-  finalResultNumber: { color: '#FFF', fontSize: 48, fontWeight: 'bold' },
-  finalResultSub: { color: '#7FC8C0', fontSize: 12, marginTop: 10, textAlign: 'center' }
 });
