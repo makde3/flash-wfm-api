@@ -50,7 +50,7 @@ function ChampParam({ label, info, value, onChangeText }: { label: string; info:
   return (
     <View style={styles.paramField}>
       <View style={styles.labelRow}>
-        <Text style={styles.labelInline}>{label}</Text>
+        <Text style={styles.labelInline} numberOfLines={1}>{label}</Text>
         <View
           accessibilityLabel={info}
           ref={Platform.OS === 'web' ? (node) => {
@@ -512,7 +512,7 @@ export default function FlashWFM() {
                 ) : (
                   <>
                     <ChampParam label="SLA cible (%)" info="Part des demandes traitées dans le délai cible." value={sla} onChangeText={setSla} />
-                    <ChampParam label="Temps cible SLA (secondes)" info="Délai maximal de prise en charge (ex : 20s)." value={tempsCible} onChangeText={setTempsCible} />
+                    <ChampParam label="Temps SLA (s)" info="Délai maximal de prise en charge (ex : 20s)." value={tempsCible} onChangeText={setTempsCible} />
                   </>
                 )}
                 <ChampParam label="Shrinkage (%)" info="Pauses, formations, congés et absentéisme." value={shrinkage} onChangeText={setShrinkage} />
@@ -741,8 +741,8 @@ const styles = StyleSheet.create({
   exportBtn: { backgroundColor: '#F4C430', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
   exportBtnText: { color: '#0F2D46', fontWeight: 'bold', fontSize: 14 },
   paramGrid: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, width: '100%' },
-  paramField: { flexGrow: 1, flexShrink: 1, flexBasis: 180, minWidth: 150, width: '100%' },
-  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5, minHeight: 20 },
+  paramField: { flexGrow: 1, flexShrink: 1, flexBasis: 180, minWidth: 150, width: '100%', alignItems: 'stretch' },
+  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 4, marginBottom: 5, height: 24, minHeight: 24 },
   labelInline: { color: '#0F2D46', fontWeight: 'bold' },
   infoIcon: { width: 16, height: 16 },
   paramInput: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', height: 46, paddingVertical: 0, paddingHorizontal: 12, borderRadius: 8, fontSize: 16, color: '#0F2D46', width: '100%' },
