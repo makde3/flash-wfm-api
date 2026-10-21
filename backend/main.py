@@ -29,6 +29,8 @@ class ErlangRequest(BaseModel):
     heures_ouverture: float = 8.0
     type_flux: str = "chaud"
     backlog: int = 0
+    delai_sla_jours: int = 1
+    taux_occupation: int = 85
 
 class PrevisionRequest(BaseModel):
     modele: str
@@ -62,9 +64,20 @@ def calculer_etp_pour_volume(volume, req: ErlangRequest):
     return math.ceil(agents / (1 - (req.shrinkage / 100.0)))
 
 def calculer_etp_ticketing(volume, req: ErlangRequest):
-    charge = (volume * (req.aht / 3600.0)) + req.backlog
-    capacite = req.heures_ouverture * (1 - req.shrinkage / 100.0)
-    return math.ceil(charge / capacite)
+    aht_heures = req.aht / 3600.0
+    charge_heures = (volume + req.backlog) * aht_heures
+
+    capacite_agent_jour = (
+        req.heures_ouverture
+        * (1.0 - (req.shrinkage / 100.0))
+        * (req.taux_occupation / 100.0)
+    )
+    if capacite_agent_jour <= 0:
+        return 1
+
+    sla_jours = max(1, req.delai_sla_jours)
+    etp = math.ceil(charge_heures / (capacite_agent_jour * sla_jours))
+    return max(1, etp)
 
 SAISON_ANNUELLE = 365
 FEATURES_TEMPORELLES = [

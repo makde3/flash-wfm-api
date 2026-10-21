@@ -245,6 +245,8 @@ export default function FlashWFM() {
   const [shrinkage, setShrinkage] = useState('25');
   const [typeFlux, setTypeFlux] = useState<'chaud' | 'froid'>('chaud');
   const [backlog, setBacklog] = useState('0');
+  const [delaiSlaJours, setDelaiSlaJours] = useState('1');
+  const [tauxOccupation, setTauxOccupation] = useState('85');
   
   const [showResult, setShowResult] = useState(false);
   const [etpResult, setEtpResult] = useState<number | null>(null);
@@ -346,6 +348,8 @@ export default function FlashWFM() {
           heures_ouverture: parseFloat(heuresOuverture) || 8,
           type_flux: typeFlux,
           backlog: parseInt(backlog, 10) || 0,
+          delai_sla_jours: parseInt(delaiSlaJours, 10) || 1,
+          taux_occupation: parseInt(tauxOccupation, 10) || 85,
         },
       }, 60000);
 
@@ -467,7 +471,7 @@ export default function FlashWFM() {
                   style={[styles.horizonBtn, typeFlux === 'chaud' && styles.modelBtnActive]}
                   onPress={() => { setTypeFlux('chaud'); setPlan(null); }}
                 >
-                  <Text style={[styles.modelBtnText, typeFlux === 'chaud' && styles.modelBtnTextActive]}>🔥 Flux Chaud (Téléphonie / Chat)</Text>
+                  <Text style={[styles.modelBtnText, typeFlux === 'chaud' && styles.modelBtnTextActive]}>🔥 Flux Chaud (Appels / Chat)</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.horizonBtn, typeFlux === 'froid' && styles.modelBtnActive]}
@@ -483,11 +487,22 @@ export default function FlashWFM() {
                   <Text style={styles.hint}>Durée moyenne de traitement (conversation + post-appel).</Text>
                 </View>
                 {typeFlux === 'froid' ? (
-                  <View style={styles.paramField}>
-                    <Text style={styles.label}>Backlog initial (tickets en attente)</Text>
-                    <TextInput style={styles.input} value={backlog} onChangeText={setBacklog} keyboardType="numeric" />
-                    <Text style={styles.hint}>Tickets déjà en file d'attente au démarrage du plan.</Text>
-                  </View>
+                  <>
+                    <View style={styles.paramField}>
+                      <Text style={styles.label}>Engagement de réponse (SLA en jours ouvrés)</Text>
+                      <TextInput style={styles.input} value={delaiSlaJours} onChangeText={setDelaiSlaJours} keyboardType="numeric" />
+                      <Text style={styles.hint}>Ex : 1 jour = traitement le jour même (8h ouvrées), 2 jours = lissage sous 48h.</Text>
+                    </View>
+                    <View style={styles.paramField}>
+                      <Text style={styles.label}>Backlog initial (tickets en attente)</Text>
+                      <TextInput style={styles.input} value={backlog} onChangeText={setBacklog} keyboardType="numeric" />
+                      <Text style={styles.hint}>Tickets déjà en file d'attente au démarrage du plan.</Text>
+                    </View>
+                    <View style={styles.paramField}>
+                      <Text style={styles.label}>Taux d'occupation cible (%)</Text>
+                      <TextInput style={styles.input} value={tauxOccupation} onChangeText={setTauxOccupation} keyboardType="numeric" />
+                    </View>
+                  </>
                 ) : (
                   <>
                     <View style={styles.paramField}>
