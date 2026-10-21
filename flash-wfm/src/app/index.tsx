@@ -527,7 +527,17 @@ export default function FlashWFM() {
                   style={[styles.modelBtn, styles.modelBtnDash, !moyenneDisponible && styles.modelBtnLocked, moyenneDisponible && selectedModel === 'Prophet' && styles.modelBtnActive]}
                   onPress={() => (moyenneDisponible ? setSelectedModel('Prophet') : setModalePro(true))}
                 >
-                  <Text style={[styles.modelBtnText, moyenneDisponible && selectedModel === 'Prophet' && styles.modelBtnTextActive]}>📈 Prophet (Moyenne & Saisonnier)</Text>
+                  <Text style={[styles.modelBtnText, moyenneDisponible && selectedModel === 'Prophet' && styles.modelBtnTextActive]}>📈 Moyenne Historique (Baseline)</Text>
+                  <View
+                    accessibilityLabel="Calcul basé sur la moyenne lissée des historiques. Sert de baseline de référence."
+                    ref={Platform.OS === 'web' ? (node) => {
+                      const element = node as unknown as { setAttribute?: (nom: string, valeur: string) => void } | null;
+                      element?.setAttribute?.('title', 'Calcul basé sur la moyenne lissée des historiques. Sert de baseline de référence.');
+                    } : undefined}
+                    style={[styles.infoIcon, Platform.OS === 'web' ? ({ cursor: 'help' } as never) : null]}
+                  >
+                    <Ionicons name="information-circle-outline" size={16} color={moyenneDisponible && selectedModel === 'Prophet' ? '#F4C430' : '#687581'} />
+                  </View>
                   {!moyenneDisponible ? <Text style={styles.proBadge}>Pro</Text> : null}
                 </TouchableOpacity>
                 <TouchableOpacity
