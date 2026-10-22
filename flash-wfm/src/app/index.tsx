@@ -50,9 +50,9 @@ function HeaderLogo({
         <Text style={styles.brandSubtitle}>{subtitle || 'DATA · MÉTIER · PERFORMANCE'}</Text>
       </View>
       <View style={styles.headerActions}>
-        <TouchableOpacity style={styles.logoutBtn} onPress={onAbonnement} disabled={paiementEnCours}>
+        <TouchableOpacity style={[styles.logoutBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={onAbonnement} disabled={paiementEnCours}>
           <Text style={styles.logoutText} numberOfLines={1}>
-            {paiementEnCours ? "Connexion..." : abonnementActif ? "Gérer mon abonnement" : "Passer au plan Pro"}
+            {paiementEnCours ? "Connexion au serveur..." : abonnementActif ? "Gérer mon abonnement" : "Passer au plan Pro"}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.logoutBtn} onPress={() => supabase.auth.signOut()}>

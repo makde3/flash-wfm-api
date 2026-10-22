@@ -5,10 +5,14 @@ import type { Session } from '@supabase/supabase-js';
 import { retourConfirmation, supabase } from '../lib/supabase';
 import AuthScreen from './AuthScreen';
 
+const INACTIVITE_MS = 30 * 60 * 1000;
+const MESSAGE_SESSION_EXPIREE = "Votre session a expiré pour cause d'inactivité. Veuillez vous reconnecter.";
+
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [emailConfirme, setEmailConfirme] = useState(retourConfirmation.confirme);
+  const [sessionExpiree, setSessionExpiree] = useState<string | null>(null);
   const bloquerSessionLien = useState({ courant: retourConfirmation.confirme })[0];
 
   useEffect(() => {
@@ -32,6 +36,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         setReady(true);
         return;
       }
+      if (next) setSessionExpiree(null);
       setSession(next);
       setReady(true);
     });
@@ -40,6 +45,27 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       data.subscription.unsubscribe();
     };
   }, [bloquerSessionLien]);
+
+  useEffect(() => {
+    if (!session || typeof window === 'undefined') return;
+    let identifiant = 0;
+    const expirer = () => {
+      window.clearTimeout(identifiant);
+      setSessionExpiree(MESSAGE_SESSION_EXPIREE);
+      void supabase.auth.signOut();
+    };
+    const reinitialiser = () => {
+      window.clearTimeout(identifiant);
+      identifiant = window.setTimeout(expirer, INACTIVITE_MS);
+    };
+    const noms = ['mousemove', 'keydown', 'click', 'scroll'] as const;
+    reinitialiser();
+    noms.forEach((nom) => window.addEventListener(nom, reinitialiser, true));
+    return () => {
+      window.clearTimeout(identifiant);
+      noms.forEach((nom) => window.removeEventListener(nom, reinitialiser, true));
+    };
+  }, [session]);
 
   if (!ready) {
     return (
@@ -54,6 +80,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       <AuthScreen
         emailConfirme={emailConfirme}
         erreurConfirmation={retourConfirmation.erreur}
+        sessionExpiree={sessionExpiree}
         onConnexion={() => {
           bloquerSessionLien.courant = false;
         }}

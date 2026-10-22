@@ -6,10 +6,11 @@ import { supabase } from '../lib/supabase';
 type AuthScreenProps = {
   emailConfirme?: boolean;
   erreurConfirmation?: string | null;
+  sessionExpiree?: string | null;
   onConnexion?: () => void;
 };
 
-export default function AuthScreen({ emailConfirme = false, erreurConfirmation = null, onConnexion }: AuthScreenProps) {
+export default function AuthScreen({ emailConfirme = false, erreurConfirmation = null, sessionExpiree = null, onConnexion }: AuthScreenProps) {
   const [mode, setMode] = useState<'connexion' | 'inscription'>('connexion');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -51,6 +52,11 @@ export default function AuthScreen({ emailConfirme = false, erreurConfirmation =
         {erreurConfirmation ? (
           <View style={[styles.banner, styles.bannerErreur]}>
             <Text style={styles.bannerText}>Le lien de confirmation n'a pas abouti. {erreurConfirmation}</Text>
+          </View>
+        ) : null}
+        {sessionExpiree ? (
+          <View style={[styles.banner, styles.bannerErreur]}>
+            <Text style={styles.bannerText}>{sessionExpiree}</Text>
           </View>
         ) : null}
         <Text style={styles.heading}>{mode === 'connexion' ? 'Connexion' : 'Inscription'}</Text>
