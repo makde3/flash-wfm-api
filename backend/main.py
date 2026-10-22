@@ -192,22 +192,6 @@ def parser_un_volume(valeur):
     texte = str(valeur).strip().replace('\u00a0', '').replace(' ', '').replace(',', '.')
     return pd.to_numeric(texte, errors='coerce')
 
-def apercu(valeur):
-    return f"{valeur!r} ({type(valeur).__name__})"
-
-def journaliser_payload(donnees):
-    print(f"-> Lignes recues : {len(donnees)}", flush=True)
-    if not donnees:
-        print("-> Payload vide", flush=True)
-        return
-    print(f"-> Cles : {list(donnees[0].keys())}", flush=True)
-    for index, ligne in enumerate(donnees[:3]):
-        print(
-            f"-> Exemple {index + 1} : date={apercu(ligne.get('date'))} "
-            f"file={apercu(ligne.get('file'))} volume={apercu(ligne.get('volume'))}",
-            flush=True,
-        )
-
 def debut_prevision(est_court_terme, maintenant):
     if est_court_terme:
         return (maintenant.replace(day=1) + timedelta(days=32)).replace(day=1)
@@ -272,14 +256,20 @@ def essai_expire(created_at) -> bool:
         debut = debut.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc) >= debut + timedelta(days=ESSAI_JOURS)
 
+def url_projet_supabase() -> str:
+    url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+    for suffixe in ("/auth/v1", "/rest/v1"):
+        if url.endswith(suffixe):
+            url = url[: -len(suffixe)]
+    return url
+
 def _decoder_jwt(token: str, cle, algorithmes):
-    options = {"require": ["exp", "sub"]}
     arguments = {
         "algorithms": algorithmes,
-        "audience": "authenticated",
-        "options": options,
+        "options": {"require": ["exp", "sub"], "verify_aud": False},
+        "leeway": 30,
     }
-    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    url = url_projet_supabase()
     if url:
         arguments["issuer"] = f"{url}/auth/v1"
     return jwt.decode(token, cle, **arguments)
@@ -298,35 +288,47 @@ def identite_depuis_authorization(authorization: str | None) -> str:
         print("-> JWT refuse : token manquant", flush=True)
         raise HTTPException(status_code=401, detail="Token absent ou invalide.")
 
-    secret = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
-    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    raisons: list[str] = []
-    payload = None
-    if not secret:
-        raisons.append("secret introuvable")
-    else:
-        try:
+    secret = os.getenv("SUPABASE_JWT_SECRET", "").strip()
+    url = url_projet_supabase()
+    try:
+        algorithme = jwt.get_unverified_header(token).get("alg")
+    except jwt.PyJWTError:
+        print("-> JWT refuse : token illisible", flush=True)
+        raise HTTPException(status_code=401, detail="Token absent ou invalide.")
+    try:
+        if algorithme == "HS256":
+            if not secret:
+                print("-> JWT refuse : secret introuvable", flush=True)
+                raise HTTPException(status_code=401, detail="Token absent ou invalide.")
             payload = _decoder_jwt(token, secret, ["HS256"])
-        except jwt.PyJWTError as exc:
-            raisons.append(_raison_echec_jwt(exc))
-    if payload is None and url:
-        try:
+        elif algorithme in {"RS256", "ES256"}:
+            if not url:
+                print("-> JWT refuse : URL Supabase absente", flush=True)
+                raise HTTPException(status_code=401, detail="Token absent ou invalide.")
             if url not in _clients_jwks:
                 _clients_jwks[url] = jwt.PyJWKClient(f"{url}/auth/v1/.well-known/jwks.json")
             cle = _clients_jwks[url].get_signing_key_from_jwt(token)
             payload = _decoder_jwt(token, cle.key, ["RS256", "ES256"])
-        except Exception as exc:
-            raisons.append(_raison_echec_jwt(exc))
-    if payload and payload.get("role") == "authenticated" and payload.get("sub"):
+        else:
+            print("-> JWT refuse : algorithme non autorise", flush=True)
+            raise HTTPException(status_code=401, detail="Token absent ou invalide.")
+    except HTTPException:
+        raise
+    except jwt.PyJWTError as exc:
+        print(f"-> JWT refuse : {_raison_echec_jwt(exc)}", flush=True)
+        raise HTTPException(status_code=401, detail="Token absent ou invalide.")
+    except Exception as exc:
+        print(f"-> JWT refuse : {_raison_echec_jwt(exc)}", flush=True)
+        raise HTTPException(status_code=401, detail="Token absent ou invalide.")
+    if payload.get("role") == "authenticated" and payload.get("sub"):
         return str(payload["sub"])
-    raison = " ; ".join(raisons) if raisons else "token invalide"
-    print(f"-> JWT refuse : {raison}", flush=True)
+    print("-> JWT refuse : token invalide", flush=True)
     raise HTTPException(status_code=401, detail="Token absent ou invalide.")
 
 def client_service():
     global _client_service
-    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    cle = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    url = url_projet_supabase()
+    cle = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if not url or not cle:
         raise HTTPException(status_code=503, detail="Vérification des droits indisponible.")
     if _client_service is None:
@@ -394,7 +396,6 @@ def lever_si_memoire(exc: BaseException) -> None:
     raise HTTPException(status_code=500, detail="Mémoire insuffisante pour entraîner ce modèle.") from exc
 
 def entrainer_holt(df, dates_futur):
-    print("-> Lancement de l'algorithme : Holt-Winters", flush=True)
     historique = df.set_index('date')['volume'].astype(float).sort_index()
     historique = historique[~historique.index.duplicated(keep='last')].asfreq('D')
     historique = historique.interpolate(limit_direction='both')
@@ -422,7 +423,6 @@ def entrainer_holt(df, dates_futur):
     return complet.tolist(), "Holt-Winters"
 
 def entrainer_lightgbm(df, dates_futur):
-    print("-> Lancement de l'algorithme : LightGBM Boosté", flush=True)
     df = df.copy()
     df['jour_semaine'] = df['date'].dt.dayofweek
     df['mois'] = df['date'].dt.month
@@ -431,7 +431,6 @@ def entrainer_lightgbm(df, dates_futur):
     facteur_mois = (df.groupby('mois')['volume'].mean() / moyenne_globale).to_dict()
     X = features_temporelles(df['date'])
     y = df['volume']
-    print(f"-> Features NaN : {int(X[FEATURES_TEMPORELLES].isna().sum().sum())}", flush=True)
     model = lgb.LGBMRegressor(n_estimators=100, learning_rate=0.05, verbose=-1)
     model.fit(X[FEATURES_TEMPORELLES], y, categorical_feature=['month_tier'])
     X_futur = features_temporelles(dates_futur)
@@ -453,7 +452,7 @@ def verifier_droit_modele(modele: str, profil: dict, pro_actif: bool) -> None:
         raise HTTPException(status_code=403, detail="L'essai gratuit est expiré.")
 
 def verifier_signature_stripe(corps: bytes, signature: str | None) -> dict:
-    secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+    secret = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
     if not secret:
         print("-> Secret de webhook Stripe absent", flush=True)
         raise HTTPException(status_code=503, detail="Vérification du webhook indisponible.")
@@ -525,6 +524,31 @@ def enregistrer_abonnement(abonnement: dict, supprime: bool) -> None:
         print("-> Ecriture de l'abonnement impossible", flush=True)
         raise HTTPException(status_code=500, detail="Enregistrement de l'abonnement impossible.")
 
+def abonnement_depuis_session_checkout(session: dict) -> None:
+    if session.get("mode") != "subscription":
+        return
+    abonnement_id = session.get("subscription")
+    if isinstance(abonnement_id, dict):
+        abonnement = dict(abonnement_id)
+    elif abonnement_id:
+        recupere = stripe.Subscription.retrieve(str(abonnement_id))
+        abonnement = recupere.to_dict() if hasattr(recupere, "to_dict") else dict(recupere)
+    else:
+        raise HTTPException(status_code=400, detail="Session Checkout sans abonnement.")
+    if not utilisateur_abonnement(abonnement):
+        candidat = session.get("client_reference_id") or (session.get("metadata") or {}).get("user_id")
+        try:
+            user_id = str(uuid.UUID(str(candidat))) if candidat else None
+        except (ValueError, TypeError, AttributeError):
+            user_id = None
+        if user_id:
+            meta = dict(abonnement.get("metadata") or {})
+            meta["user_id"] = user_id
+            abonnement["metadata"] = meta
+    if not abonnement.get("customer") and session.get("customer"):
+        abonnement["customer"] = session.get("customer")
+    enregistrer_abonnement(abonnement, supprime=False)
+
 @app.get("/")
 def home():
     return {"message": "Serveur Flash WFM operationnel."}
@@ -534,7 +558,19 @@ async def webhook_stripe(request: Request):
     corps = await request.body()
     evenement = verifier_signature_stripe(corps, request.headers.get("stripe-signature"))
     type_evenement = evenement.get("type")
-    if type_evenement in {
+    if type_evenement == "checkout.session.completed":
+        cle = os.getenv("STRIPE_SECRET_KEY", "").strip()
+        if not cle:
+            print("-> Configuration Stripe incomplete", flush=True)
+            raise HTTPException(status_code=503, detail="Paiement indisponible.")
+        stripe.api_key = cle
+        try:
+            abonnement_depuis_session_checkout(evenement["data"]["object"])
+        except stripe.StripeError:
+            print("-> Lecture de l'abonnement Stripe impossible", flush=True)
+            raise HTTPException(status_code=500, detail="Enregistrement de l'abonnement impossible.")
+        print(f"-> Abonnement Stripe enregistre : {type_evenement}", flush=True)
+    elif type_evenement in {
         "customer.subscription.created",
         "customer.subscription.updated",
         "customer.subscription.deleted",
@@ -549,9 +585,9 @@ async def webhook_stripe(request: Request):
 @app.post("/create-checkout-session")
 def creer_session_checkout(authorization: str | None = Header(default=None)):
     user_id = identite_depuis_authorization(authorization)
-    cle = os.environ.get("STRIPE_SECRET_KEY", "").strip()
-    prix = os.environ.get("STRIPE_PRICE_ID", "").strip()
-    front = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+    cle = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    prix = os.getenv("STRIPE_PRICE_ID", "").strip()
+    front = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
     if not cle or not prix or not front.startswith(("http://", "https://")):
         print("-> Configuration Stripe incomplete", flush=True)
         raise HTTPException(status_code=503, detail="Paiement indisponible.")
@@ -631,8 +667,8 @@ def customer_id_par_email(user_id: str) -> str | None:
 @app.post("/create-portal-session")
 def creer_session_portail(authorization: str | None = Header(default=None)):
     user_id = identite_depuis_authorization(authorization)
-    cle = os.environ.get("STRIPE_SECRET_KEY", "").strip()
-    front = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+    cle = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    front = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
     if not cle or not front.startswith(("http://", "https://")):
         print("-> Configuration Stripe incomplete", flush=True)
         raise HTTPException(status_code=503, detail="Paiement indisponible.")
@@ -668,38 +704,20 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
     user_id = identite_depuis_authorization(authorization)
     profil = lire_profil(user_id)
     verifier_droit_modele(requete.modele, profil, abonnement_pro_actif(user_id))
-    print("\n" + "="*40, flush=True)
-    print("NOUVELLE DEMANDE DE PREVISION", flush=True)
-    print(f"-> Modele demande : '{requete.modele}'", flush=True)
-    print(f"-> Horizon demande : '{requete.horizon}'", flush=True)
-    journaliser_payload(requete.donnees)
 
     df = pd.DataFrame(requete.donnees)
     if df.empty or 'date' not in df.columns or 'volume' not in df.columns:
-        print(f"-> Colonnes recues : {df.columns.tolist()}", flush=True)
         return {"statut": "erreur", "message": "Fichier invalide : colonnes date et volume absentes."}
 
-    recues = len(df)
     df['date'] = df['date'].map(parser_une_date)
     df['volume'] = df['volume'].map(parser_un_volume)
     invalides = df['date'].isna() | df['volume'].isna()
-    if invalides.any():
-        print(f"-> Lignes ignorees : {int(invalides.sum())} (date ou volume illisible)", flush=True)
     df = df.loc[~invalides].sort_values('date').reset_index(drop=True)
     if df.empty:
-        print("-> Aucune ligne exploitable apres parsing. Repli evite.", flush=True)
         return {
             "statut": "erreur",
             "message": "Aucune date ou volume exploitable. Formats acceptes : jj/mm/aaaa, aaaa-mm-jj, ou numero de serie Excel.",
         }
-
-    print(f"-> Lignes gardees : {len(df)} / {recues}", flush=True)
-    print(f"-> Dates : {df['date'].min().date()} -> {df['date'].max().date()}", flush=True)
-    print(
-        f"-> Volume min/moy/max/ecart : {df['volume'].min():.1f} / {df['volume'].mean():.1f} / "
-        f"{df['volume'].max():.1f} / {df['volume'].std(ddof=0):.1f}",
-        flush=True,
-    )
 
     est_court_terme = (requete.horizon == 'court_terme')
     nb_steps_jour = 30 if est_court_terme else 365
@@ -728,7 +746,6 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
                 lever_si_memoire(exc)
                 raise
         else:
-            print("-> Modele Moyenne Saisonnière intra-semaine", flush=True)
             df['jour_semaine'] = df['date'].dt.dayofweek
             moyennes_jours = df.groupby('jour_semaine')['volume'].mean().to_dict()
             moyenne_globale = df['volume'].mean()
@@ -757,7 +774,6 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
             nom_modele_final = "Moyenne (suite à un plantage)"
 
     moyenne_volume = float(df['volume'].mean()) if len(df) else 1.0
-    non_finis = 0
     previsions_propres = []
     for vol in previsions_brutes:
         try:
@@ -765,15 +781,9 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
         except (TypeError, ValueError):
             valeur = moyenne_volume
         if not math.isfinite(valeur):
-            non_finis += 1
             valeur = moyenne_volume
         previsions_propres.append(valeur)
     previsions_brutes = previsions_propres
-    ecart = float(np.std(previsions_brutes)) if previsions_brutes else 0.0
-    print(f"-> Previsions non finies remplacees par la moyenne : {non_finis}", flush=True)
-    print(f"-> Ecart-type des previsions : {ecart:.2f}", flush=True)
-    if ecart < 1e-6:
-        print("-> Prevision plate : l'historique ne distingue pas les periodes, pas un repli NaN.", flush=True)
 
     plan_production = []
     flux_froid = requete.parametres_erlang.type_flux == "froid"
@@ -814,8 +824,6 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
             annee_suivante = annee + (mois // 12)
             date_courante = date_courante.replace(year=annee_suivante, month=mois_suivant)
 
-    print("-> CALCUL TERMINE AVEC SUCCES", flush=True)
-    print("=" * 40 + "\n", flush=True)
     return {
         "statut": "succès",
         "message": f"Plan genere avec {nom_modele_final}",

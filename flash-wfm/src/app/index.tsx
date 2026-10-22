@@ -316,7 +316,7 @@ async function creerSessionPortail(token: string) {
   return data ?? {};
 }
 
-async function postApi(path: string, body: unknown, timeoutMs = 5000, token?: string) {
+async function postApi(path: string, body: unknown, timeoutMs = 5000, token: string) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -325,7 +325,7 @@ async function postApi(path: string, body: unknown, timeoutMs = 5000, token?: st
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
       signal: controller.signal,
