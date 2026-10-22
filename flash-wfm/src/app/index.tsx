@@ -285,6 +285,37 @@ async function creerSessionCheckout(token: string) {
   return data ?? {};
 }
 
+async function creerSessionPortail(token: string) {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/create-portal-session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    console.error(error);
+    throw new Error("Impossible d'ouvrir le portail de gestion. Réessayez dans un instant.");
+  }
+  const texte = await response.text();
+  let data: any = null;
+  if (texte) {
+    try {
+      data = JSON.parse(texte);
+    } catch {
+      data = null;
+    }
+  }
+  if (!response.ok) {
+    const detail = typeof data?.detail === 'string' ? data.detail : typeof data?.message === 'string' ? data.message : '';
+    throw new ErreurApi(response.status, messageHttp(response.status, detail));
+  }
+  return data ?? {};
+}
+
 async function postApi(path: string, body: unknown, timeoutMs = 5000, token?: string) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -338,6 +369,7 @@ export default function FlashWFM() {
   const [delaiSlaJours, setDelaiSlaJours] = useState('1');
   const [tauxOccupation, setTauxOccupation] = useState('85');
   const [abonnement, setAbonnement] = useState<'free' | 'pro'>('free');
+  const [abonnementActif, setAbonnementActif] = useState(false);
   const [finEssai, setFinEssai] = useState<number | null>(null);
   const [modalePro, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
@@ -372,6 +404,7 @@ export default function FlashWFM() {
       const creation = user.created_at ? new Date(user.created_at).getTime() : Date.now();
       const pro = (abonnements ?? []).some((ligne) => ligne.status === 'active' || ligne.status === 'trialing');
       setFinEssai(creation + 3 * 24 * 60 * 60 * 1000);
+      setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
       setAbonnement(pro ? 'pro' : 'free');
     });
     return () => {
@@ -404,6 +437,37 @@ export default function FlashWFM() {
         alert(error.message);
       } else {
         alert("Impossible de joindre le serveur de paiement. Réessayez dans un instant.");
+      }
+    } finally {
+      setPaiementEnCours(false);
+    }
+  };
+
+  const gererAbonnement = async () => {
+    if (paiementEnCours) return;
+    setPaiementEnCours(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        alert("Veuillez vous reconnecter");
+        return;
+      }
+      const data = await creerSessionPortail(session.access_token);
+      if (typeof data?.url !== 'string' || !data.url) {
+        alert("Portail de gestion indisponible.");
+        return;
+      }
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.location.assign(data.url);
+        return;
+      }
+      await Linking.openURL(data.url);
+    } catch (error) {
+      console.error(error);
+      if (error instanceof ErreurApi) {
+        alert(error.message);
+      } else {
+        alert("Impossible d'ouvrir le portail de gestion. Réessayez dans un instant.");
       }
     } finally {
       setPaiementEnCours(false);
@@ -643,6 +707,16 @@ export default function FlashWFM() {
                 </TouchableOpacity>
               </View>
 
+              {abonnementActif ? (
+                <TouchableOpacity style={[styles.generateBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={gererAbonnement} disabled={paiementEnCours}>
+                  {paiementEnCours ? (
+                    <Text style={styles.paiementAttente}>Connexion au portail de gestion...</Text>
+                  ) : (
+                    <Text style={styles.generateBtnText}>Gérer mon abonnement</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+
               <TouchableOpacity style={[styles.generateBtn, loading && styles.generateBtnDisabled]} onPress={handleGenerate} disabled={loading}>
                 {loading ? (
                   <ActivityIndicator color="#0F2D46" />
@@ -671,11 +745,19 @@ export default function FlashWFM() {
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Passez au plan Pro pour débloquer</Text>
-              <TouchableOpacity style={[styles.generateBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={passerAuPro} disabled={paiementEnCours}>
+              <TouchableOpacity
+                style={[styles.generateBtn, paiementEnCours && styles.generateBtnDisabled]}
+                onPress={abonnementActif ? gererAbonnement : passerAuPro}
+                disabled={paiementEnCours}
+              >
                 {paiementEnCours ? (
-                  <Text style={styles.paiementAttente}>Connexion au serveur de paiement... (cela peut prendre quelques secondes)</Text>
+                  <Text style={styles.paiementAttente}>
+                    {abonnementActif
+                      ? "Connexion au portail de gestion..."
+                      : "Connexion au serveur de paiement... (cela peut prendre quelques secondes)"}
+                  </Text>
                 ) : (
-                  <Text style={styles.generateBtnText}>Passer au plan Pro</Text>
+                  <Text style={styles.generateBtnText}>{abonnementActif ? "Gérer mon abonnement" : "Passer au plan Pro"}</Text>
                 )}
               </TouchableOpacity>
               <TouchableOpacity style={styles.backBtn} onPress={() => setModalePro(false)}>

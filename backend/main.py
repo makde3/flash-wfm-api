@@ -491,7 +491,7 @@ def enregistrer_abonnement(abonnement: dict, supprime: bool) -> None:
     identifiant = abonnement.get("id")
     if not identifiant:
         raise HTTPException(status_code=400, detail="Abonnement Stripe incomplet.")
-    statut = "canceled" if supprime and not abonnement.get("status") else (abonnement.get("status") or "canceled")
+    statut = "canceled" if supprime else (abonnement.get("status") or "canceled")
     champs = {
         "stripe_customer_id": abonnement.get("customer"),
         "stripe_subscription_id": identifiant,
@@ -574,6 +574,91 @@ def creer_session_checkout(authorization: str | None = Header(default=None)):
         url = session.to_dict().get("url")
     if not url:
         raise HTTPException(status_code=500, detail="Session de paiement indisponible.")
+    return {"url": url}
+
+def customer_id_enregistre(user_id: str) -> str | None:
+    try:
+        reponse = (
+            client_service().table("subscriptions")
+            .select("stripe_customer_id, status")
+            .eq("user_id", user_id)
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        print("-> Lecture de l'abonnement impossible", flush=True)
+        raise HTTPException(status_code=403, detail="Droits utilisateur introuvables.")
+    lignes = reponse.data or []
+    for ligne in lignes:
+        if str(ligne.get("status") or "") == "active" and ligne.get("stripe_customer_id"):
+            return str(ligne["stripe_customer_id"])
+    for ligne in lignes:
+        if ligne.get("stripe_customer_id"):
+            return str(ligne["stripe_customer_id"])
+    return None
+
+def customer_id_par_email(user_id: str) -> str | None:
+    try:
+        reponse = (
+            client_service().table("profiles")
+            .select("email")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        print("-> Lecture de l'email impossible", flush=True)
+        return None
+    lignes = reponse.data or []
+    email = str((lignes[0].get("email") if lignes else "") or "").strip()
+    if not email:
+        return None
+    trouves = stripe.Customer.list(email=email, limit=1)
+    clients = getattr(trouves, "data", None)
+    if clients is None and hasattr(trouves, "to_dict"):
+        clients = trouves.to_dict().get("data") or []
+    if not clients:
+        return None
+    premier = clients[0]
+    identifiant = getattr(premier, "id", None)
+    if not identifiant and isinstance(premier, dict):
+        identifiant = premier.get("id")
+    return str(identifiant) if identifiant else None
+
+@app.post("/create-portal-session")
+def creer_session_portail(authorization: str | None = Header(default=None)):
+    user_id = identite_depuis_authorization(authorization)
+    cle = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+    front = os.environ.get("FRONTEND_URL", "").strip().rstrip("/")
+    if not cle or not front.startswith(("http://", "https://")):
+        print("-> Configuration Stripe incomplete", flush=True)
+        raise HTTPException(status_code=503, detail="Paiement indisponible.")
+    stripe.api_key = cle
+    customer_id = customer_id_enregistre(user_id)
+    if not customer_id:
+        try:
+            customer_id = customer_id_par_email(user_id)
+        except stripe.StripeError:
+            print("-> Recherche du client Stripe impossible", flush=True)
+            customer_id = None
+    if not customer_id:
+        raise HTTPException(status_code=404, detail="Aucun abonnement à gérer.")
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=front,
+        )
+    except stripe.StripeError:
+        print("-> Creation du portail Stripe impossible", flush=True)
+        raise HTTPException(status_code=500, detail="Portail de gestion indisponible.")
+    url = getattr(session, "url", None)
+    if not url and hasattr(session, "to_dict"):
+        url = session.to_dict().get("url")
+    if not url:
+        raise HTTPException(status_code=500, detail="Portail de gestion indisponible.")
     return {"url": url}
 
 @app.post("/prevision_plan")
