@@ -26,7 +26,17 @@ function masquerBarreDefilement() {
   document.head.appendChild(style);
 }
 
-function HeaderLogo({ subtitle }: { subtitle?: string }) {
+function HeaderLogo({
+  subtitle,
+  abonnementActif,
+  paiementEnCours,
+  onAbonnement,
+}: {
+  subtitle?: string;
+  abonnementActif: boolean;
+  paiementEnCours: boolean;
+  onAbonnement: () => void;
+}) {
   return (
     <View style={styles.headerContainer}>
       <View style={styles.logoBadge}>
@@ -39,9 +49,16 @@ function HeaderLogo({ subtitle }: { subtitle?: string }) {
         <Text style={styles.brandByline}>by MakConsult</Text>
         <Text style={styles.brandSubtitle}>{subtitle || 'DATA · MÉTIER · PERFORMANCE'}</Text>
       </View>
-      <TouchableOpacity style={styles.logoutBtn} onPress={() => supabase.auth.signOut()}>
-        <Text style={styles.logoutText}>Déconnexion</Text>
-      </TouchableOpacity>
+      <View style={styles.headerActions}>
+        <TouchableOpacity style={styles.logoutBtn} onPress={onAbonnement} disabled={paiementEnCours}>
+          <Text style={styles.logoutText} numberOfLines={1}>
+            {paiementEnCours ? "Connexion..." : abonnementActif ? "Gérer mon abonnement" : "Passer au plan Pro"}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.logoutBtn} onPress={() => supabase.auth.signOut()}>
+          <Text style={styles.logoutText}>Déconnexion</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -605,7 +622,12 @@ export default function FlashWFM() {
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView contentContainerStyle={styles.dashScroll}>
-          <HeaderLogo subtitle="DATA · MÉTIER · PERFORMANCE" />
+          <HeaderLogo
+            subtitle="DATA · MÉTIER · PERFORMANCE"
+            abonnementActif={abonnementActif}
+            paiementEnCours={paiementEnCours}
+            onAbonnement={abonnementActif ? gererAbonnement : passerAuPro}
+          />
           <View style={styles.dash}>
             <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentStep(1)}>
               <Text style={styles.backBtnText}>← Retour</Text>
@@ -707,16 +729,6 @@ export default function FlashWFM() {
                 </TouchableOpacity>
               </View>
 
-              {abonnementActif ? (
-                <TouchableOpacity style={[styles.generateBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={gererAbonnement} disabled={paiementEnCours}>
-                  {paiementEnCours ? (
-                    <Text style={styles.paiementAttente}>Connexion au portail de gestion...</Text>
-                  ) : (
-                    <Text style={styles.generateBtnText}>Gérer mon abonnement</Text>
-                  )}
-                </TouchableOpacity>
-              ) : null}
-
               <TouchableOpacity style={[styles.generateBtn, loading && styles.generateBtnDisabled]} onPress={handleGenerate} disabled={loading}>
                 {loading ? (
                   <ActivityIndicator color="#0F2D46" />
@@ -745,21 +757,7 @@ export default function FlashWFM() {
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Passez au plan Pro pour débloquer</Text>
-              <TouchableOpacity
-                style={[styles.generateBtn, paiementEnCours && styles.generateBtnDisabled]}
-                onPress={abonnementActif ? gererAbonnement : passerAuPro}
-                disabled={paiementEnCours}
-              >
-                {paiementEnCours ? (
-                  <Text style={styles.paiementAttente}>
-                    {abonnementActif
-                      ? "Connexion au portail de gestion..."
-                      : "Connexion au serveur de paiement... (cela peut prendre quelques secondes)"}
-                  </Text>
-                ) : (
-                  <Text style={styles.generateBtnText}>{abonnementActif ? "Gérer mon abonnement" : "Passer au plan Pro"}</Text>
-                )}
-              </TouchableOpacity>
+              <Text style={styles.hint}>Utilisez le bouton « Passer au plan Pro » dans la barre du haut.</Text>
               <TouchableOpacity style={styles.backBtn} onPress={() => setModalePro(false)}>
                 <Text style={styles.backBtnText}>Fermer</Text>
               </TouchableOpacity>
@@ -773,7 +771,12 @@ export default function FlashWFM() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollCenter}>
-        <HeaderLogo subtitle="DATA · MÉTIER · PERFORMANCE" />
+        <HeaderLogo
+          subtitle="DATA · MÉTIER · PERFORMANCE"
+          abonnementActif={abonnementActif}
+          paiementEnCours={paiementEnCours}
+          onAbonnement={abonnementActif ? gererAbonnement : passerAuPro}
+        />
         {messagePaiement ? (
           <View style={[styles.successBox, { maxWidth: 600, marginBottom: 16 }]}>
             <Text style={styles.successText}>{messagePaiement}</Text>
@@ -851,13 +854,19 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
     marginTop: 2,
   },
-  logoutBtn: {
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginLeft: 8,
+  },
+  logoutBtn: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#0F2D46',
+    justifyContent: 'center',
   },
   logoutText: {
     color: '#0F2D46',
@@ -899,7 +908,6 @@ const styles = StyleSheet.create({
   generateBtn: { marginTop: 10, backgroundColor: '#7FC8C0', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 8, width: '100%', alignItems: 'center', justifyContent: 'center', minHeight: 50 },
   generateBtnDisabled: { opacity: 0.7 },
   generateBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
-  paiementAttente: { color: '#0F2D46', fontSize: 14, fontWeight: '600', textAlign: 'center', lineHeight: 20 },
   horizonLabel: { alignSelf: 'flex-start', color: '#0F2D46', fontWeight: 'bold', marginBottom: 8, marginTop: 12 },
   horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 12 },
   horizonBtn: { flex: 1, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', paddingVertical: 14, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
