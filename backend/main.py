@@ -284,32 +284,44 @@ def _decoder_jwt(token: str, cle, algorithmes):
         arguments["issuer"] = f"{url}/auth/v1"
     return jwt.decode(token, cle, **arguments)
 
+def _raison_echec_jwt(exc: BaseException) -> str:
+    if isinstance(exc, jwt.InvalidSignatureError):
+        return "signature invalide"
+    return f"{exc.__class__.__name__}: {exc}"
+
 def identite_depuis_authorization(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
+        print("-> JWT refuse : token manquant", flush=True)
         raise HTTPException(status_code=401, detail="Token absent ou invalide.")
     token = authorization.split(" ", 1)[1].strip()
     if not token:
+        print("-> JWT refuse : token manquant", flush=True)
         raise HTTPException(status_code=401, detail="Token absent ou invalide.")
 
     secret = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    raisons: list[str] = []
     payload = None
-    if secret:
+    if not secret:
+        raisons.append("secret introuvable")
+    else:
         try:
             payload = _decoder_jwt(token, secret, ["HS256"])
-        except jwt.PyJWTError:
-            payload = None
+        except jwt.PyJWTError as exc:
+            raisons.append(_raison_echec_jwt(exc))
     if payload is None and url:
         try:
             if url not in _clients_jwks:
                 _clients_jwks[url] = jwt.PyJWKClient(f"{url}/auth/v1/.well-known/jwks.json")
             cle = _clients_jwks[url].get_signing_key_from_jwt(token)
             payload = _decoder_jwt(token, cle.key, ["RS256", "ES256"])
-        except Exception:
-            payload = None
-    if not payload or payload.get("role") != "authenticated" or not payload.get("sub"):
-        raise HTTPException(status_code=401, detail="Token absent ou invalide.")
-    return str(payload["sub"])
+        except Exception as exc:
+            raisons.append(_raison_echec_jwt(exc))
+    if payload and payload.get("role") == "authenticated" and payload.get("sub"):
+        return str(payload["sub"])
+    raison = " ; ".join(raisons) if raisons else "token invalide"
+    print(f"-> JWT refuse : {raison}", flush=True)
+    raise HTTPException(status_code=401, detail="Token absent ou invalide.")
 
 def client_service():
     global _client_service

@@ -260,9 +260,8 @@ async function creerSessionCheckout(token: string) {
     response = await fetch(`${API_BASE}/create-checkout-session`, {
       method: 'POST',
       headers: {
-        Accept: 'application/json',
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify({}),
     });
@@ -384,13 +383,12 @@ export default function FlashWFM() {
     if (paiementEnCours) return;
     setPaiementEnCours(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-      if (!token) {
-        alert("Session expirée. Veuillez vous reconnecter.");
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        alert("Veuillez vous reconnecter");
         return;
       }
-      const data = await creerSessionCheckout(token);
+      const data = await creerSessionCheckout(session.access_token);
       if (typeof data?.url !== 'string' || !data.url) {
         alert("Session de paiement indisponible.");
         return;
