@@ -16,6 +16,23 @@ import lightgbm as lgb
 import stripe
 from supabase import create_client
 
+def charger_env_local() -> None:
+    chemin = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.isfile(chemin):
+        return
+    with open(chemin, encoding="utf-8") as fichier:
+        for ligne in fichier:
+            ligne = ligne.strip()
+            if not ligne or ligne.startswith("#") or "=" not in ligne:
+                continue
+            cle, _, valeur = ligne.partition("=")
+            cle = cle.strip()
+            valeur = valeur.strip().strip('"').strip("'")
+            if cle and cle not in os.environ:
+                os.environ[cle] = valeur
+
+charger_env_local()
+
 MAX_CORPS_OCTETS = 5 * 1024 * 1024
 MAX_LIGNES_HISTORIQUE = 5000
 
