@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Platform, ScrollView, TextInput, ActivityIndicator, Linking, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -49,15 +49,6 @@ function dateCourte(date: string) {
   const mois = date.match(/^(\d{2})\/(\d{4})$/);
   if (mois) return `${mois[1]}/${mois[2].slice(2)}`;
   return date;
-}
-
-function masquerBarreDefilement() {
-  if (Platform.OS !== 'web' || typeof document === 'undefined') return;
-  if (document.getElementById('flash-plan-scroll-style')) return;
-  const style = document.createElement('style');
-  style.id = 'flash-plan-scroll-style';
-  style.textContent = '#flash-plan-scroll, #flash-plan-scroll * { scrollbar-width: none; -ms-overflow-style: none; } #flash-plan-scroll::-webkit-scrollbar, #flash-plan-scroll *::-webkit-scrollbar { display: none; height: 0; width: 0; }';
-  document.head.appendChild(style);
 }
 
 function texteEcart(valeur: number | null) {
@@ -196,99 +187,178 @@ function Stepper({ etape, etapeMax, peutOuvrir, onAller }: { etape: Etape; etape
   );
 }
 
-const styleDefilementWeb = {
+type CellulePlan = { key: string; texte: string; couleur?: string; fort?: boolean };
+type LignePlan = { libelle: string; alt: boolean; cellules: CellulePlan[] };
+
+const FOND_LIGNE = '#FFFFFF';
+const FOND_LIGNE_ALT = '#F8FAFC';
+const FOND_ENTETE = '#0F172A';
+
+const styleDefilement: CSSProperties = {
   width: '100%',
   overflowX: 'auto',
-  overflowY: 'auto',
 };
 
-const styleColonneFixe = {
-  position: 'sticky',
-  left: 0,
-  zIndex: 10,
-  backgroundColor: '#FFFFFF',
-  borderRightWidth: 1,
-  borderRightColor: '#E2E8F0',
-  boxShadow: '2px 0 5px -2px rgba(0,0,0,0.1)',
+const styleTable: CSSProperties = {
+  borderCollapse: 'collapse',
+  whiteSpace: 'nowrap',
+  width: 'max-content',
+  minWidth: '100%',
 };
 
-const styleColonneFixeHead = {
+const styleEnteteDate: CSSProperties = {
+  position: 'relative',
+  zIndex: 0,
+  minWidth: 85,
+  width: 85,
+  boxSizing: 'border-box',
+  textAlign: 'center',
+  verticalAlign: 'middle',
+  whiteSpace: 'nowrap',
+  padding: '12px 8px',
+  backgroundColor: FOND_ENTETE,
+  color: '#F8FAFC',
+  fontWeight: 600,
+  fontSize: 13,
+};
+
+const styleEnteteFixe: CSSProperties = {
+  ...styleEnteteDate,
   position: 'sticky',
   left: 0,
   zIndex: 20,
-  backgroundColor: '#0F2D46',
-  borderRightWidth: 1,
-  borderRightColor: '#E2E8F0',
-  boxShadow: '2px 0 5px -2px rgba(0,0,0,0.1)',
+  minWidth: 210,
+  width: 210,
+  textAlign: 'left',
+  padding: '12px 16px',
+  borderRight: '2px solid #E2E8F0',
+  boxShadow: '4px 0 10px -2px rgba(0,0,0,0.1)',
 };
 
-function CelluleLibelle({ children, head, alt }: { children: string; head?: boolean; alt?: boolean }) {
-  const fixe = head
-    ? styleColonneFixeHead
-    : { ...styleColonneFixe, backgroundColor: alt ? '#F7F6F1' : '#FFFFFF' };
-  return (
-    <View style={[styles.hLabel, alt && styles.hLabelAlt, head && styles.hLabelHead, Platform.OS === 'web' ? (fixe as never) : null]}>
-      <Text style={[styles.hLabelText, head && styles.hLabelHeadText]}>{children}</Text>
-    </View>
+function styleValeur(alt: boolean, couleur?: string, fort?: boolean): CSSProperties {
+  return {
+    position: 'relative',
+    zIndex: 0,
+    minWidth: 85,
+    width: 85,
+    boxSizing: 'border-box',
+    textAlign: 'center',
+    verticalAlign: 'middle',
+    whiteSpace: 'nowrap',
+    padding: '12px 8px',
+    backgroundColor: alt ? FOND_LIGNE_ALT : FOND_LIGNE,
+    color: couleur ?? '#1E293B',
+    fontWeight: fort ? 700 : 400,
+    fontSize: 14,
+    borderBottom: '1px solid #E2E8F0',
+  };
+}
+
+function styleLibelle(alt: boolean): CSSProperties {
+  return {
+    ...styleValeur(alt),
+    position: 'sticky',
+    left: 0,
+    zIndex: 10,
+    minWidth: 210,
+    width: 210,
+    textAlign: 'left',
+    padding: '12px 16px',
+    fontWeight: 500,
+    color: '#1E293B',
+    borderRight: '2px solid #E2E8F0',
+    boxShadow: '4px 0 10px -2px rgba(0,0,0,0.1)',
+  };
+}
+
+function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null): LignePlan[] {
+  const lignes: LignePlan[] = [
+    {
+      libelle: 'Volume prévu',
+      alt: false,
+      cellules: plan.map((row, index) => ({ key: `v-${index}`, texte: row.volume_prevu.toLocaleString('fr-FR') })),
+    },
+    {
+      libelle: 'ETP requis',
+      alt: true,
+      cellules: plan.map((row, index) => ({ key: `e-${index}`, texte: row.etp_moyen_requis.toLocaleString('fr-FR') })),
+    },
+  ];
+  if (!couvertures) return lignes;
+  lignes.push(
+    {
+      libelle: 'Écart ETP',
+      alt: false,
+      cellules: couvertures.map((ligne, index) => ({ key: `ec-${index}`, texte: texteEcart(ligne.ecart), couleur: couleurEcart(ligne.ecart), fort: true })),
+    },
+    {
+      libelle: 'Taux de couverture (%)',
+      alt: true,
+      cellules: couvertures.map((ligne, index) => ({ key: `c-${index}`, texte: texteCouverture(ligne.couverture), couleur: couleurCouverture(ligne.couverture), fort: true })),
+    },
+  );
+  return lignes;
+}
+
+function TableauPlanWeb({ plan, couvertures }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null }) {
+  const lignes = lignesPlan(plan, couvertures);
+  return React.createElement(
+    'div',
+    { id: 'flash-plan-scroll', style: styleDefilement },
+    React.createElement(
+      'table',
+      { style: styleTable },
+      React.createElement(
+        'thead',
+        null,
+        React.createElement(
+          'tr',
+          null,
+          React.createElement('th', { style: styleEnteteFixe }, 'Période'),
+          plan.map((row, index) => React.createElement('th', { key: `d-${index}`, style: styleEnteteDate }, dateCourte(row.date))),
+        ),
+      ),
+      React.createElement(
+        'tbody',
+        null,
+        lignes.map((ligne) => React.createElement(
+          'tr',
+          { key: ligne.libelle },
+          React.createElement('td', { style: styleLibelle(ligne.alt) }, ligne.libelle),
+          ligne.cellules.map((cellule) => React.createElement('td', { key: cellule.key, style: styleValeur(ligne.alt, cellule.couleur, cellule.fort) }, cellule.texte)),
+        )),
+      ),
+    ),
   );
 }
 
 function HorizontalPlan({ plan, couvertures }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null }) {
-  useEffect(() => {
-    masquerBarreDefilement();
-  }, []);
   if (plan.length === 0) return null;
+  if (Platform.OS === 'web') {
+    return <View style={styles.hTable}>{TableauPlanWeb({ plan, couvertures })}</View>;
+  }
 
-  const lignes = (
-        <View>
-          <View style={styles.hRow}>
-            <CelluleLibelle head>Période</CelluleLibelle>
-            {plan.map((row, index) => (
-              <Text key={`${row.date}-d-${index}`} style={styles.hHeadCell}>{dateCourte(row.date)}</Text>
-            ))}
-          </View>
-          <View style={styles.hRow}>
-            <CelluleLibelle>Volume prévu</CelluleLibelle>
-            {plan.map((row, index) => (
-              <Text key={`${row.date}-v-${index}`} style={styles.hCell}>{row.volume_prevu.toLocaleString('fr-FR')}</Text>
-            ))}
-          </View>
-          <View style={[styles.hRow, styles.hRowAlt]}>
-            <CelluleLibelle alt>ETP requis</CelluleLibelle>
-            {plan.map((row, index) => (
-              <Text key={`${row.date}-e-${index}`} style={styles.hCell}>{row.etp_moyen_requis.toLocaleString('fr-FR')}</Text>
-            ))}
-          </View>
-          {couvertures ? (
-            <>
-              <View style={styles.hRow}>
-                <CelluleLibelle>Écart ETP</CelluleLibelle>
-                {couvertures.map((ligne, index) => (
-                  <Text key={`ecart-${index}`} style={[styles.hCell, styles.hCellFort, { color: couleurEcart(ligne.ecart) }]}>{texteEcart(ligne.ecart)}</Text>
-                ))}
-              </View>
-              <View style={[styles.hRow, styles.hRowAlt]}>
-                <CelluleLibelle alt>Taux de couverture (%)</CelluleLibelle>
-                {couvertures.map((ligne, index) => (
-                  <Text key={`couv-${index}`} style={[styles.hCell, styles.hCellFort, { color: couleurCouverture(ligne.couverture) }]}>{texteCouverture(ligne.couverture)}</Text>
-                ))}
-              </View>
-            </>
-          ) : null}
-        </View>
-  );
-
+  const lignes = lignesPlan(plan, couvertures);
   return (
     <View style={styles.hTable}>
-      {Platform.OS === 'web' ? (
-        <View nativeID="flash-plan-scroll" style={[styles.hScroll, styleDefilementWeb as never]}>
-          {lignes}
+      <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.hScroll}>
+        <View>
+          <View style={styles.hRow}>
+            <Text style={[styles.hLabel, styles.hLabelHead]} numberOfLines={1}>Période</Text>
+            {plan.map((row, index) => (
+              <Text key={`d-${index}`} style={styles.hHeadCell} numberOfLines={1}>{dateCourte(row.date)}</Text>
+            ))}
+          </View>
+          {lignes.map((ligne) => (
+            <View key={ligne.libelle} style={[styles.hRow, ligne.alt && styles.hRowAlt]}>
+              <Text style={[styles.hLabel, ligne.alt && styles.hLabelAlt]} numberOfLines={1}>{ligne.libelle}</Text>
+              {ligne.cellules.map((cellule) => (
+                <Text key={cellule.key} numberOfLines={1} style={[styles.hCell, cellule.fort && styles.hCellFort, cellule.couleur ? { color: cellule.couleur } : null]}>{cellule.texte}</Text>
+              ))}
+            </View>
+          ))}
         </View>
-      ) : (
-        <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator={false} nativeID="flash-plan-scroll" style={styles.hScroll}>
-          {lignes}
-        </ScrollView>
-      )}
+      </ScrollView>
     </View>
   );
 }
@@ -1304,17 +1374,15 @@ const styles = StyleSheet.create({
   paramInputDense: { paddingHorizontal: 8, marginTop: 'auto' },
   modelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, width: '100%', marginTop: 16 },
   modelBtnDash: { flexGrow: 1, flexShrink: 1, flexBasis: 220, minWidth: 180 },
-  hTable: { width: '100%', borderWidth: 1, borderColor: '#E6E9EE', borderRadius: 8, overflow: 'hidden' },
+  hTable: { width: '100%', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden' },
   hScroll: { width: '100%' },
   hRow: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#FFFFFF' },
-  hRowAlt: { backgroundColor: '#F7F6F1' },
-  hLabel: { width: 176, paddingVertical: 12, paddingHorizontal: 10, justifyContent: 'center', backgroundColor: '#FFFFFF', flexShrink: 0 },
-  hLabelAlt: { backgroundColor: '#F7F6F1' },
-  hLabelHead: { backgroundColor: '#0F2D46' },
-  hLabelText: { color: '#0F2D46', fontWeight: 'bold', fontSize: 13 },
-  hLabelHeadText: { color: '#F4C430' },
-  hHeadCell: { width: 88, paddingVertical: 12, paddingHorizontal: 6, textAlign: 'center', color: '#F4C430', fontWeight: 'bold', fontSize: 13, backgroundColor: '#0F2D46' },
-  hCell: { width: 88, paddingVertical: 12, paddingHorizontal: 6, textAlign: 'center', color: '#0F2D46', fontSize: 14 },
+  hRowAlt: { backgroundColor: '#F8FAFC' },
+  hLabel: { width: 210, minWidth: 210, paddingVertical: 12, paddingHorizontal: 16, color: '#1E293B', fontWeight: '500', fontSize: 14, backgroundColor: '#FFFFFF', flexShrink: 0 },
+  hLabelAlt: { backgroundColor: '#F8FAFC' },
+  hLabelHead: { backgroundColor: '#0F172A', color: '#F8FAFC', fontWeight: '600', fontSize: 13 },
+  hHeadCell: { width: 85, minWidth: 85, paddingVertical: 12, paddingHorizontal: 8, textAlign: 'center', color: '#F8FAFC', fontWeight: '600', fontSize: 13, backgroundColor: '#0F172A', flexShrink: 0 },
+  hCell: { width: 85, minWidth: 85, paddingVertical: 12, paddingHorizontal: 8, textAlign: 'center', color: '#1E293B', fontSize: 14, flexShrink: 0 },
   hCellFort: { fontWeight: '700' },
   hint: { color: '#687581', fontSize: 12, lineHeight: 16, marginTop: 6 },
   stepper: { flexDirection: 'row', width: '100%', marginBottom: 16, gap: 8 },
