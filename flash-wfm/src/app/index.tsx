@@ -196,30 +196,65 @@ function Stepper({ etape, etapeMax, peutOuvrir, onAller }: { etape: Etape; etape
   );
 }
 
+const styleDefilementWeb = {
+  width: '100%',
+  overflowX: 'auto',
+  overflowY: 'auto',
+};
+
+const styleColonneFixe = {
+  position: 'sticky',
+  left: 0,
+  zIndex: 10,
+  backgroundColor: '#FFFFFF',
+  borderRightWidth: 1,
+  borderRightColor: '#E2E8F0',
+  boxShadow: '2px 0 5px -2px rgba(0,0,0,0.1)',
+};
+
+const styleColonneFixeHead = {
+  position: 'sticky',
+  left: 0,
+  zIndex: 20,
+  backgroundColor: '#0F2D46',
+  borderRightWidth: 1,
+  borderRightColor: '#E2E8F0',
+  boxShadow: '2px 0 5px -2px rgba(0,0,0,0.1)',
+};
+
+function CelluleLibelle({ children, head, alt }: { children: string; head?: boolean; alt?: boolean }) {
+  const fixe = head
+    ? styleColonneFixeHead
+    : { ...styleColonneFixe, backgroundColor: alt ? '#F7F6F1' : '#FFFFFF' };
+  return (
+    <View style={[styles.hLabel, alt && styles.hLabelAlt, head && styles.hLabelHead, Platform.OS === 'web' ? (fixe as never) : null]}>
+      <Text style={[styles.hLabelText, head && styles.hLabelHeadText]}>{children}</Text>
+    </View>
+  );
+}
+
 function HorizontalPlan({ plan, couvertures }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null }) {
   useEffect(() => {
     masquerBarreDefilement();
   }, []);
   if (plan.length === 0) return null;
 
-  return (
-    <View style={styles.hTable}>
-      <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator={false} nativeID="flash-plan-scroll" style={styles.hScroll}>
+  const lignes = (
         <View>
           <View style={styles.hRow}>
-            <Text style={[styles.hLabel, styles.hLabelHead]}>Période</Text>
+            <CelluleLibelle head>Période</CelluleLibelle>
             {plan.map((row, index) => (
               <Text key={`${row.date}-d-${index}`} style={styles.hHeadCell}>{dateCourte(row.date)}</Text>
             ))}
           </View>
           <View style={styles.hRow}>
-            <Text style={styles.hLabel}>Volume prévu</Text>
+            <CelluleLibelle>Volume prévu</CelluleLibelle>
             {plan.map((row, index) => (
               <Text key={`${row.date}-v-${index}`} style={styles.hCell}>{row.volume_prevu.toLocaleString('fr-FR')}</Text>
             ))}
           </View>
           <View style={[styles.hRow, styles.hRowAlt]}>
-            <Text style={styles.hLabel}>ETP requis</Text>
+            <CelluleLibelle alt>ETP requis</CelluleLibelle>
             {plan.map((row, index) => (
               <Text key={`${row.date}-e-${index}`} style={styles.hCell}>{row.etp_moyen_requis.toLocaleString('fr-FR')}</Text>
             ))}
@@ -227,13 +262,13 @@ function HorizontalPlan({ plan, couvertures }: { plan: PlanLigne[]; couvertures:
           {couvertures ? (
             <>
               <View style={styles.hRow}>
-                <Text style={styles.hLabel}>Écart ETP</Text>
+                <CelluleLibelle>Écart ETP</CelluleLibelle>
                 {couvertures.map((ligne, index) => (
                   <Text key={`ecart-${index}`} style={[styles.hCell, styles.hCellFort, { color: couleurEcart(ligne.ecart) }]}>{texteEcart(ligne.ecart)}</Text>
                 ))}
               </View>
               <View style={[styles.hRow, styles.hRowAlt]}>
-                <Text style={styles.hLabel}>Taux de couverture (%)</Text>
+                <CelluleLibelle alt>Taux de couverture (%)</CelluleLibelle>
                 {couvertures.map((ligne, index) => (
                   <Text key={`couv-${index}`} style={[styles.hCell, styles.hCellFort, { color: couleurCouverture(ligne.couverture) }]}>{texteCouverture(ligne.couverture)}</Text>
                 ))}
@@ -241,7 +276,19 @@ function HorizontalPlan({ plan, couvertures }: { plan: PlanLigne[]; couvertures:
             </>
           ) : null}
         </View>
-      </ScrollView>
+  );
+
+  return (
+    <View style={styles.hTable}>
+      {Platform.OS === 'web' ? (
+        <View nativeID="flash-plan-scroll" style={[styles.hScroll, styleDefilementWeb as never]}>
+          {lignes}
+        </View>
+      ) : (
+        <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator={false} nativeID="flash-plan-scroll" style={styles.hScroll}>
+          {lignes}
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -1261,8 +1308,11 @@ const styles = StyleSheet.create({
   hScroll: { width: '100%' },
   hRow: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#FFFFFF' },
   hRowAlt: { backgroundColor: '#F7F6F1' },
-  hLabel: { width: 176, paddingVertical: 12, paddingHorizontal: 10, color: '#0F2D46', fontWeight: 'bold', fontSize: 13 },
-  hLabelHead: { backgroundColor: '#0F2D46', color: '#F4C430' },
+  hLabel: { width: 176, paddingVertical: 12, paddingHorizontal: 10, justifyContent: 'center', backgroundColor: '#FFFFFF', flexShrink: 0 },
+  hLabelAlt: { backgroundColor: '#F7F6F1' },
+  hLabelHead: { backgroundColor: '#0F2D46' },
+  hLabelText: { color: '#0F2D46', fontWeight: 'bold', fontSize: 13 },
+  hLabelHeadText: { color: '#F4C430' },
   hHeadCell: { width: 88, paddingVertical: 12, paddingHorizontal: 6, textAlign: 'center', color: '#F4C430', fontWeight: 'bold', fontSize: 13, backgroundColor: '#0F2D46' },
   hCell: { width: 88, paddingVertical: 12, paddingHorizontal: 6, textAlign: 'center', color: '#0F2D46', fontSize: 14 },
   hCellFort: { fontWeight: '700' },
