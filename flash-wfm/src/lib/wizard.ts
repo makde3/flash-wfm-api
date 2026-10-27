@@ -1,3 +1,5 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 export type Horizon = 'court_terme' | 'long_terme';
 export type TypeFlux = 'chaud' | 'froid';
 export type Etape = 1 | 2 | 3 | 4;
@@ -22,6 +24,7 @@ export type LigneCouverture = {
 
 export type CacheWizard = {
   version: 1;
+  userId: string;
   currentStep: Etape;
   etapeMax: Etape;
   fileName: string | null;
@@ -52,34 +55,70 @@ const TEST_DMT = /dmt|aht|dur[ée]e|tmo|temps moyen/i;
 const TEST_DATE = /date|jour/i;
 const TEST_ETP = /etp|effectif|pr[ée]sent|dispo|planning/i;
 
-export function lireCache(): CacheWizard | null {
-  if (typeof window === 'undefined' || !window.localStorage) return null;
+function estCleTravail(cle: string) {
+  return cle === CLE_WIZARD || cle === CLE_ANCIENNE || cle.startsWith('flash_wfm') || cle.startsWith('flash-wfm');
+}
+
+async function lireBrut(): Promise<string | null> {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    return window.localStorage.getItem(CLE_WIZARD) ?? window.localStorage.getItem(CLE_ANCIENNE);
+  }
+  return (await AsyncStorage.getItem(CLE_WIZARD)) ?? (await AsyncStorage.getItem(CLE_ANCIENNE));
+}
+
+export async function cacheDuProprietaire(userId: string): Promise<CacheWizard | null> {
   try {
-    const brut = window.localStorage.getItem(CLE_WIZARD) ?? window.localStorage.getItem(CLE_ANCIENNE);
+    const brut = await lireBrut();
     if (!brut) return null;
-    return assainirCache(JSON.parse(brut));
+    const cache = assainirCache(JSON.parse(brut));
+    if (!cache || cache.userId !== userId) {
+      await purgerDonneesTravail();
+      return null;
+    }
+    return cache;
   } catch {
+    await purgerDonneesTravail();
     return null;
   }
 }
 
-export function ecrireCache(cache: CacheWizard) {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  try {
-    window.localStorage.setItem(CLE_WIZARD, JSON.stringify(cache));
-  } catch {
+export async function ecrireCache(cache: CacheWizard) {
+  const json = JSON.stringify(cache);
+  if (typeof window !== 'undefined' && window.localStorage) {
     try {
-      window.localStorage.setItem(CLE_WIZARD, JSON.stringify({ ...cache, dataPreview: null }));
+      window.localStorage.setItem(CLE_WIZARD, json);
     } catch {
-      /* quota plein : la session en cours reste en mémoire */
+      try {
+        window.localStorage.setItem(CLE_WIZARD, JSON.stringify({ ...cache, dataPreview: null }));
+      } catch {
+        /* quota plein : la session en cours reste en mémoire */
+      }
     }
+    return;
+  }
+  await AsyncStorage.setItem(CLE_WIZARD, json);
+}
+
+export async function purgerDonneesTravail() {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const cles: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const cle = window.localStorage.key(index);
+      if (cle && estCleTravail(cle)) cles.push(cle);
+    }
+    cles.forEach((cle) => window.localStorage.removeItem(cle));
+  }
+  try {
+    const cles = await AsyncStorage.getAllKeys();
+    const cibles = cles.filter(estCleTravail);
+    if (cibles.length) await AsyncStorage.multiRemove(cibles);
+  } catch {
+    /* le stockage natif peut être indisponible dans le navigateur */
   }
 }
 
 export function effacerCache() {
-  if (typeof window === 'undefined' || !window.localStorage) return;
-  window.localStorage.removeItem(CLE_WIZARD);
-  window.localStorage.removeItem(CLE_ANCIENNE);
+  void purgerDonneesTravail();
 }
 
 export function nombre(valeur: unknown): number | null {
@@ -261,6 +300,7 @@ function assainirCache(brut: unknown): CacheWizard | null {
     : null;
   return {
     version: 1,
+    userId: typeof source.userId === 'string' ? source.userId : '',
     currentStep,
     etapeMax: Math.max(currentStep, etapeMax) as Etape,
     fileName: typeof source.fileName === 'string' ? source.fileName : null,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Platform, ScrollView, TextInput, ActivityIndicator, Linking, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -7,17 +7,19 @@ import * as XLSXStyle from 'xlsx-js-style';
 import CombinedChart from '../components/CombinedChart';
 import { useAuth } from '../context/AuthContext';
 import { LienReinitialisation } from '../lib/session';
+import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
+import { enregistrerResetWizard } from '../lib/wizardStore';
 import {
   couverturesDuPlan,
   dmtMoyenHistorique,
-  effacerCache,
   ecrireCache,
   historiqueExploitable,
-  lireCache,
+  cacheDuProprietaire,
   nombre,
   parserPlanningEtp,
   planMock,
+  purgerDonneesTravail,
   type CacheWizard,
   type Etape,
   type EtpJour,
@@ -133,7 +135,7 @@ function HeaderLogo({
             <Text style={styles.devBadgeText}>{isPro ? 'DEV : PRO' : 'DEV : FREE'}</Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={styles.logoutBtn} onPress={() => supabase.auth.signOut()}>
+        <TouchableOpacity style={styles.logoutBtn} onPress={() => { void deconnecter(); }}>
           <Text style={styles.logoutText}>Déconnexion</Text>
         </TouchableOpacity>
       </View>
@@ -703,31 +705,30 @@ function ZoneImport({
 }
 
 export default function FlashWFM() {
-  const cache = useState(lireCache)[0];
-  const [currentStep, setCurrentStep] = useState<Etape>(cache?.currentStep ?? 1);
-  const [etapeMax, setEtapeMax] = useState<Etape>(cache?.etapeMax ?? 1);
-  const [fileName, setFileName] = useState<string | null>(cache?.fileName ?? null);
-  const [dataPreview, setDataPreview] = useState<Record<string, unknown>[] | null>(cache?.dataPreview ?? null);
-  const [etpFileName, setEtpFileName] = useState<string | null>(cache?.etpFileName ?? null);
-  const [etpPlanning, setEtpPlanning] = useState<EtpJour[] | null>(cache?.etpPlanning ?? null);
-  const [etpBrouillon, setEtpBrouillon] = useState<EtpJour[] | null>(cache?.etpPlanning ?? null);
-  const [etpStatut, setEtpStatut] = useState<StatutEtp>(cache?.etpStatut ?? 'vide');
-  const [typeFlux, setTypeFlux] = useState<TypeFlux>(cache?.typeFlux ?? 'chaud');
-  const [heuresOuverture, setHeuresOuverture] = useState(cache?.heuresOuverture ?? '8');
-  const [aht, setAht] = useState(cache?.aht ?? '360');
-  const [sla, setSla] = useState(cache?.sla ?? '80');
-  const [tempsCible, setTempsCible] = useState(cache?.tempsCible ?? '20');
-  const [shrinkage, setShrinkage] = useState(cache?.shrinkage ?? '25');
-  const [backlog, setBacklog] = useState(cache?.backlog ?? '0');
-  const [delaiSlaJours, setDelaiSlaJours] = useState(cache?.delaiSlaJours ?? '1');
-  const [tauxOccupation, setTauxOccupation] = useState(cache?.tauxOccupation ?? '85');
-  const [selectedModel, setSelectedModel] = useState<string | null>(cache?.selectedModel ?? null);
-  const [horizon, setHorizon] = useState<Horizon>(cache?.horizon ?? 'court_terme');
-  const [plans, setPlans] = useState<Record<Horizon, PlanLigne[] | null>>(cache?.plans ?? plansVides());
-  const [etpMoyens, setEtpMoyens] = useState(cache?.etpMoyens ?? '');
-  const [etpMoyensAppliques, setEtpMoyensAppliques] = useState<number | null>(cache?.etpMoyensAppliques ?? null);
+  const [currentStep, setCurrentStep] = useState<Etape>(1);
+  const [etapeMax, setEtapeMax] = useState<Etape>(1);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [dataPreview, setDataPreview] = useState<Record<string, unknown>[] | null>(null);
+  const [etpFileName, setEtpFileName] = useState<string | null>(null);
+  const [etpPlanning, setEtpPlanning] = useState<EtpJour[] | null>(null);
+  const [etpBrouillon, setEtpBrouillon] = useState<EtpJour[] | null>(null);
+  const [etpStatut, setEtpStatut] = useState<StatutEtp>('vide');
+  const [typeFlux, setTypeFlux] = useState<TypeFlux>('chaud');
+  const [heuresOuverture, setHeuresOuverture] = useState('8');
+  const [aht, setAht] = useState('360');
+  const [sla, setSla] = useState('80');
+  const [tempsCible, setTempsCible] = useState('20');
+  const [shrinkage, setShrinkage] = useState('25');
+  const [backlog, setBacklog] = useState('0');
+  const [delaiSlaJours, setDelaiSlaJours] = useState('1');
+  const [tauxOccupation, setTauxOccupation] = useState('85');
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [horizon, setHorizon] = useState<Horizon>('court_terme');
+  const [plans, setPlans] = useState<Record<Horizon, PlanLigne[] | null>>(plansVides());
+  const [etpMoyens, setEtpMoyens] = useState('');
+  const [etpMoyensAppliques, setEtpMoyensAppliques] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const { isPro, abonnementActif, finEssai } = useAuth();
+  const { userId, isPro, abonnementActif, finEssai } = useAuth();
   const [, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
@@ -737,6 +738,8 @@ export default function FlashWFM() {
   const [urlHistorique, setUrlHistorique] = useState('');
   const [urlEtp, setUrlEtp] = useState('');
   const [lienEnCours, setLienEnCours] = useState<'historique' | 'etp' | null>(null);
+  const [cachePret, setCachePret] = useState(false);
+  const suspendrePersistance = useRef(false);
   const essaiActif = finEssai !== null && Date.now() < finEssai;
   const moyenneDisponible = isPro || finEssai === null || essaiActif;
   const plan = plans[horizon];
@@ -748,9 +751,95 @@ export default function FlashWFM() {
   }, [plan, planningActif, etpPlanning, isPro, etpMoyensAppliques]);
   const periodesSansEtp = !!couvertures && planningActif && couvertures.some((ligne) => ligne.etpDispo == null);
 
+  const appliquerVierge = useCallback(() => {
+    setCurrentStep(1);
+    setEtapeMax(1);
+    setFileName(null);
+    setDataPreview(null);
+    setEtpFileName(null);
+    setEtpPlanning(null);
+    setEtpBrouillon(null);
+    setEtpStatut('vide');
+    setTypeFlux('chaud');
+    setHeuresOuverture('8');
+    setAht('360');
+    setSla('80');
+    setTempsCible('20');
+    setShrinkage('25');
+    setBacklog('0');
+    setDelaiSlaJours('1');
+    setTauxOccupation('85');
+    setSelectedModel(null);
+    setHorizon('court_terme');
+    setPlans(plansVides());
+    setEtpMoyens('');
+    setEtpMoyensAppliques(null);
+    setSourceHistorique('fichier');
+    setSourceEtp('fichier');
+    setUrlHistorique('');
+    setUrlEtp('');
+    setLienEnCours(null);
+    setToast(null);
+  }, []);
+
+  const appliquerCache = useCallback((cache: CacheWizard) => {
+    setCurrentStep(cache.currentStep);
+    setEtapeMax(cache.etapeMax);
+    setFileName(cache.fileName);
+    setDataPreview(cache.dataPreview);
+    setEtpFileName(cache.etpFileName);
+    setEtpPlanning(cache.etpPlanning);
+    setEtpBrouillon(cache.etpPlanning);
+    setEtpStatut(cache.etpStatut);
+    setTypeFlux(cache.typeFlux);
+    setHeuresOuverture(cache.heuresOuverture);
+    setAht(cache.aht);
+    setSla(cache.sla);
+    setTempsCible(cache.tempsCible);
+    setShrinkage(cache.shrinkage);
+    setBacklog(cache.backlog);
+    setDelaiSlaJours(cache.delaiSlaJours);
+    setTauxOccupation(cache.tauxOccupation);
+    setSelectedModel(cache.selectedModel);
+    setHorizon(cache.horizon);
+    setPlans(cache.plans);
+    setEtpMoyens(cache.etpMoyens);
+    setEtpMoyensAppliques(cache.etpMoyensAppliques);
+  }, []);
+
   useEffect(() => {
-    const payload: CacheWizard = {
+    enregistrerResetWizard(() => {
+      suspendrePersistance.current = true;
+      appliquerVierge();
+    });
+    return () => enregistrerResetWizard(null);
+  }, [appliquerVierge]);
+
+  useEffect(() => {
+    if (!userId) {
+      suspendrePersistance.current = true;
+      appliquerVierge();
+      setCachePret(false);
+      return;
+    }
+    let ignore = false;
+    cacheDuProprietaire(userId).then((cache) => {
+      if (ignore) return;
+      suspendrePersistance.current = false;
+      if (cache) appliquerCache(cache);
+      else appliquerVierge();
+      setCachePret(true);
+    });
+    return () => {
+      ignore = true;
+    };
+  }, [userId, appliquerCache, appliquerVierge]);
+
+  useEffect(() => {
+    if (!cachePret || !userId || suspendrePersistance.current) return;
+    void ecrireCache({
       version: 1,
+      userId,
       currentStep,
       etapeMax,
       fileName,
@@ -772,9 +861,8 @@ export default function FlashWFM() {
       plans,
       etpMoyens,
       etpMoyensAppliques,
-    };
-    ecrireCache(payload);
-  }, [currentStep, etapeMax, fileName, dataPreview, etpFileName, etpPlanning, etpStatut, typeFlux, heuresOuverture, aht, sla, tempsCible, shrinkage, backlog, delaiSlaJours, tauxOccupation, selectedModel, horizon, plans, etpMoyens, etpMoyensAppliques]);
+    });
+  }, [cachePret, userId, currentStep, etapeMax, fileName, dataPreview, etpFileName, etpPlanning, etpStatut, typeFlux, heuresOuverture, aht, sla, tempsCible, shrinkage, backlog, delaiSlaJours, tauxOccupation, selectedModel, horizon, plans, etpMoyens, etpMoyensAppliques]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -813,29 +901,9 @@ export default function FlashWFM() {
 
   const reinitialiser = () => {
     const appliquer = () => {
-      effacerCache();
-      setCurrentStep(1);
-      setEtapeMax(1);
-      setFileName(null);
-      setDataPreview(null);
-      setEtpFileName(null);
-      setEtpPlanning(null);
-      setEtpBrouillon(null);
-      setEtpStatut('vide');
-      setTypeFlux('chaud');
-      setHeuresOuverture('8');
-      setAht('360');
-      setSla('80');
-      setTempsCible('20');
-      setShrinkage('25');
-      setBacklog('0');
-      setDelaiSlaJours('1');
-      setTauxOccupation('85');
-      setSelectedModel(null);
-      setHorizon('court_terme');
-      setPlans(plansVides());
-      setEtpMoyens('');
-      setEtpMoyensAppliques(null);
+      suspendrePersistance.current = false;
+      appliquerVierge();
+      void purgerDonneesTravail();
     };
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       if (window.confirm('Effacer la progression enregistrée et recommencer le tunnel au début ?')) appliquer();

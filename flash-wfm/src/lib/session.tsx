@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert, Platform, StyleSheet, Text, TouchableOpacity } from 'react-native';
 
+import { resetWizardState } from './wizardStore';
 import { supabase } from './supabase';
 
 const MESSAGE = "L'application va être réinitialisée, tu vas être déconnecté.";
@@ -21,6 +22,7 @@ export async function handleHardReset() {
   const confirme = await confirmerReinitialisation();
   if (!confirme) return;
   try {
+    await resetWizardState();
     await supabase.auth.signOut();
   } catch {
     /* la purge locale continue même si le serveur ne répond pas */

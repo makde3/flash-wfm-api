@@ -7,6 +7,7 @@ export type ProfilAuth = {
 };
 
 type AuthContextValue = {
+  userId: string | null;
   profile: ProfilAuth | null;
   devForcePro: boolean;
   toggleDevPro: () => void;
@@ -18,6 +19,7 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const [userId, setUserId] = useState<string | null>(null);
   const [devForcePro, setDevForcePro] = useState(false);
   const [profile, setProfile] = useState<ProfilAuth | null>(null);
   const [abonnementActif, setAbonnementActif] = useState(false);
@@ -29,7 +31,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let actif = true;
     supabase.auth.getUser().then(async ({ data }) => {
       const user = data.user;
-      if (!user) return;
+      if (!user) {
+        if (actif) setUserId(null);
+        return;
+      }
+      if (actif) setUserId(user.id);
       const { data: abonnements } = await supabase.from('subscriptions').select('status').eq('user_id', user.id);
       if (!actif) return;
       const creation = user.created_at ? new Date(user.created_at).getTime() : Date.now();
@@ -43,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ profile, devForcePro, toggleDevPro, isPro, abonnementActif, finEssai }}>
+    <AuthContext.Provider value={{ userId, profile, devForcePro, toggleDevPro, isPro, abonnementActif, finEssai }}>
       {children}
     </AuthContext.Provider>
   );

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
+import { deconnecter } from '../lib/deconnexion';
 import { retourConfirmation, supabase } from '../lib/supabase';
 import AuthScreen from './AuthScreen';
 
@@ -20,7 +21,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(async ({ data }) => {
       if (!actif) return;
       if (retourConfirmation.confirme && data.session) {
-        await supabase.auth.signOut();
+        await deconnecter();
         if (!actif) return;
         setSession(null);
         setEmailConfirme(true);
@@ -52,7 +53,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     const expirer = () => {
       window.clearTimeout(identifiant);
       setSessionExpiree(MESSAGE_SESSION_EXPIREE);
-      void supabase.auth.signOut();
+      void deconnecter();
     };
     const reinitialiser = () => {
       window.clearTimeout(identifiant);
