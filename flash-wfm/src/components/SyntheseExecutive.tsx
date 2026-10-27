@@ -91,17 +91,18 @@ function phraseVerdict(modele: Indicateur) {
   const nom = modele.id === 'light' ? 'Le modèle IA' : 'Le modèle Tendance & Saisonnalité';
   const recommande = etpTexte(modele.etpMoyen);
   if (modele.dispo == null || modele.ecart == null) {
-    return `${nom} recommande préférentiellement ${recommande} ETP sur la période. Renseignez votre effectif disponible pour estimer l'écart.`;
+    return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Renseignez votre effectif disponible pour estimer l'écart.`;
   }
   const dispo = etpTexte(modele.dispo);
-  const ecart = etpTexte(Math.abs(modele.ecart));
-  if (modele.ecart < -0.05) {
-    return `${nom} recommande préférentiellement ${recommande} ETP sur la période. Avec votre effectif moyen actuel de ${dispo} ETP, vous prévoyez un sous-effectif de ${ecart} ETP pour tenir votre objectif de service.`;
+  const ecartArrondi = Math.round(modele.ecart * 10) / 10;
+  const ecart = etpTexte(Math.abs(ecartArrondi));
+  if (ecartArrondi < 0) {
+    return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Avec votre effectif actuel (${dispo} ETP), il vous manque ${ecart} ETP pour pouvoir respecter votre objectif de service.`;
   }
-  if (modele.ecart > 0.05) {
-    return `${nom} recommande préférentiellement ${recommande} ETP sur la période. Avec votre effectif moyen actuel de ${dispo} ETP, vous prévoyez un sur-effectif de ${ecart} ETP par rapport à votre objectif de service.`;
+  if (ecartArrondi > 0) {
+    return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Votre effectif actuel (${dispo} ETP) présente un surplus de ${ecart} ETP par rapport à votre objectif de service.`;
   }
-  return `${nom} recommande préférentiellement ${recommande} ETP sur la période. Avec votre effectif moyen actuel de ${dispo} ETP, votre effectif est aligné sur l'objectif de service.`;
+  return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Votre effectif actuel (${dispo} ETP) est parfaitement dimensionné pour respecter votre objectif de service.`;
 }
 
 function texteEcart(valeur: number) {
