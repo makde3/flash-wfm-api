@@ -7,15 +7,15 @@ const CSS_DRIVER = `
 .driver-layer{width:auto;max-width:none;height:auto;max-height:none;color:inherit;pointer-events:none;background:0 0;border:0;margin:0;padding:0;position:fixed;inset:0;overflow:visible}
 .driver-layer::backdrop{display:none}
 .driver-layer .driver-popover{pointer-events:auto}
-.driver-popover{all:unset;font-family:Inter,ui-sans-serif,Helvetica,Arial,sans-serif;box-sizing:border-box;color:#0F2D46;z-index:1000000000;background-color:#fff;border-radius:12px;min-width:250px;max-width:320px;margin:0;padding:15px;position:fixed;top:0;right:0;box-shadow:0 8px 24px #0F172A33}
-.driver-popover-title{margin:0;font-size:16px;font-weight:800;line-height:1.4;display:block;position:relative;padding-right:28px}
+.driver-popover{all:unset;font-family:Inter,system-ui,sans-serif;box-sizing:border-box;color:#1E293B;z-index:1000000000;background-color:#fff;border:1px solid #E2E8F0;border-radius:8px;min-width:250px;max-width:320px;margin:0;padding:15px;position:fixed;top:0;right:0;box-shadow:0 1px 2px #0F172A0F}
+.driver-popover-title{margin:0;font-size:16px;font-weight:600;line-height:1.4;display:block;position:relative;padding-right:28px}
 .driver-popover-close-btn{all:unset;cursor:pointer;color:#94A3B8;z-index:1;text-align:center;width:32px;height:28px;font-size:18px;position:absolute;top:0;right:0}
 .driver-popover-close-btn:hover{color:#0F2D46}
 .driver-popover-title[style*=block]+.driver-popover-description{margin-top:6px}
 .driver-popover-description{margin:0;font-size:14px;line-height:1.45;color:#334155}
 .driver-popover-footer{justify-content:space-between;align-items:center;margin-top:14px;display:flex}
-.driver-popover-progress-text{color:#64748B;font-size:12px;font-weight:700}
-.driver-popover-footer-btn{all:unset;box-sizing:border-box;cursor:pointer;background:#fff;border:1px solid #CBD5E1;border-radius:8px;padding:6px 10px;font-size:13px;font-weight:700;color:#0F2D46}
+.driver-popover-progress-text{color:#64748B;font-size:12px;font-weight:500}
+.driver-popover-footer-btn{all:unset;box-sizing:border-box;cursor:pointer;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;color:#1E293B;min-height:40px}
 .driver-popover-footer .driver-popover-btn-disabled{opacity:.5;pointer-events:none}
 .driver-popover-navigation-btns{flex-grow:1;justify-content:flex-end;display:flex;gap:6px}
 .flash-tour .driver-popover-next-btn,.flash-tour .driver-popover-done-btn{background:#F4C430;border-color:#F4C430}

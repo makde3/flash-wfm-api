@@ -120,6 +120,7 @@ class PrevisionRequest(BaseModel):
     horizon: str
     donnees: List[Dict[str, Any]]
     parametres_erlang: ErlangRequest
+    evaluer_wape: bool = False
 
 def calcul_erlang_c(agents, traffic):
     if agents <= traffic:
@@ -262,6 +263,85 @@ def prevoir_double_saisonnalite(dates, volumes, dates_futur):
         valeur = niveau * facteur_semaine.get(int(jour.dayofweek), 1.0) * facteur_mois.get(int(jour.month), 1.0)
         previsions.append(float(valeur))
     return previsions
+
+def score_wape(reel, prevu):
+    reel = np.asarray(reel, dtype=float)
+    prevu = np.asarray(prevu, dtype=float)
+    n = min(len(reel), len(prevu))
+    if n == 0:
+        return None
+    reel = reel[:n]
+    prevu = prevu[:n]
+    masque = np.isfinite(reel) & np.isfinite(prevu)
+    reel = reel[masque]
+    prevu = prevu[masque]
+    if len(reel) == 0:
+        return None
+    denom = float(np.abs(reel).sum())
+    if denom <= 0:
+        return None
+    return float(np.abs(reel - prevu).sum() / denom * 100.0)
+
+def prevoir_volumes(df, dates_futur, modele_propre):
+    df = df.copy()
+    dates_futur = pd.DatetimeIndex(pd.to_datetime(dates_futur))
+    nb = len(dates_futur)
+    modele_propre = str(modele_propre).strip().lower()
+    try:
+        if "holt" in modele_propre:
+            try:
+                return entrainer_holt(df, dates_futur)
+            except MemoryError as exc:
+                lever_si_memoire(exc)
+            except Exception as exc:
+                lever_si_memoire(exc)
+                raise
+        elif "light" in modele_propre or "lgb" in modele_propre:
+            try:
+                return entrainer_lightgbm(df, dates_futur)
+            except MemoryError as exc:
+                lever_si_memoire(exc)
+            except Exception as exc:
+                lever_si_memoire(exc)
+                raise
+        else:
+            df['jour_semaine'] = df['date'].dt.dayofweek
+            moyennes_jours = df.groupby('jour_semaine')['volume'].mean().to_dict()
+            moyenne_globale = df['volume'].mean()
+            previsions = []
+            for jour in dates_futur:
+                previsions.append(moyennes_jours.get(jour.dayofweek, moyenne_globale))
+            return previsions, "Moyenne Saisonnière"
+    except HTTPException:
+        raise
+    except MemoryError as exc:
+        lever_si_memoire(exc)
+    except Exception as e:
+        lever_si_memoire(e)
+        if "holt" in modele_propre:
+            print(f"-> Holt-Winters repli double saisonnalite ({e})", flush=True)
+            return prevoir_double_saisonnalite(df['date'], df['volume'], dates_futur), "Holt-Winters"
+        print(f"\n[ERREUR CRITIQUE] {e}\n", flush=True)
+        moyenne = float(df['volume'].mean()) if len(df) else 1.0
+        return [moyenne] * nb, "Moyenne (suite à un plantage)"
+
+def wape_sur_historique(df, modele_propre):
+    n = len(df)
+    if n < 14:
+        return None
+    n_test = min(30, max(7, n // 5))
+    if n - n_test < 7:
+        return None
+    train = df.iloc[:-n_test].reset_index(drop=True)
+    test = df.iloc[-n_test:].reset_index(drop=True)
+    try:
+        prevus, _nom = prevoir_volumes(train, pd.to_datetime(test['date']), modele_propre)
+    except Exception:
+        return None
+    score = score_wape(test['volume'].to_numpy(dtype=float), prevus)
+    if score is None:
+        return None
+    return round(score, 1)
 
 def modele_avance(modele: str) -> bool:
     nom = modele.strip().lower()
@@ -946,53 +1026,7 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
     dates_futur = pd.date_range(debut_prevision(est_court_terme, date_depart), periods=nb_steps_jour, freq='D')
     
     modele_propre = str(requete.modele).strip().lower()
-    previsions_brutes = []
-    nom_modele_final = ""
-
-    try:
-        if "holt" in modele_propre:
-            try:
-                previsions_brutes, nom_modele_final = entrainer_holt(df, dates_futur)
-            except MemoryError as exc:
-                lever_si_memoire(exc)
-            except Exception as exc:
-                lever_si_memoire(exc)
-                raise
-        elif "light" in modele_propre or "lgb" in modele_propre:
-            try:
-                previsions_brutes, nom_modele_final = entrainer_lightgbm(df, dates_futur)
-            except MemoryError as exc:
-                lever_si_memoire(exc)
-            except Exception as exc:
-                lever_si_memoire(exc)
-                raise
-        else:
-            df['jour_semaine'] = df['date'].dt.dayofweek
-            moyennes_jours = df.groupby('jour_semaine')['volume'].mean().to_dict()
-            moyenne_globale = df['volume'].mean()
-
-            previsions_brutes = []
-            for jour in dates_futur:
-                val = moyennes_jours.get(jour.dayofweek, moyenne_globale)
-                previsions_brutes.append(val)
-
-            nom_modele_final = "Moyenne Saisonnière"
-
-    except HTTPException:
-        raise
-    except MemoryError as exc:
-        lever_si_memoire(exc)
-    except Exception as e:
-        lever_si_memoire(e)
-        if "holt" in modele_propre:
-            print(f"-> Holt-Winters repli double saisonnalite ({e})", flush=True)
-            previsions_brutes = prevoir_double_saisonnalite(df['date'], df['volume'], dates_futur)
-            nom_modele_final = "Holt-Winters"
-        else:
-            print(f"\n[ERREUR CRITIQUE] {e}\n", flush=True)
-            moyenne = df['volume'].mean()
-            previsions_brutes = [moyenne] * nb_steps_jour
-            nom_modele_final = "Moyenne (suite à un plantage)"
+    previsions_brutes, nom_modele_final = prevoir_volumes(df, dates_futur, modele_propre)
 
     moyenne_volume = float(df['volume'].mean()) if len(df) else 1.0
     previsions_propres = []
@@ -1045,8 +1079,11 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
             annee_suivante = annee + (mois // 12)
             date_courante = date_courante.replace(year=annee_suivante, month=mois_suivant)
 
-    return {
+    reponse = {
         "statut": "succès",
         "message": f"Plan genere avec {nom_modele_final}",
         "plan": plan_production,
     }
+    if requete.evaluer_wape:
+        reponse["wape"] = wape_sur_historique(df, modele_propre)
+    return reponse

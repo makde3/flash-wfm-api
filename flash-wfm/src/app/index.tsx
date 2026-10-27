@@ -5,6 +5,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as XLSX from 'xlsx';
 import * as XLSXStyle from 'xlsx-js-style';
 import CombinedChart from '../components/CombinedChart';
+import SyntheseExecutive, { type ResultatModele } from '../components/SyntheseExecutive';
 import { useAuth } from '../context/AuthContext';
 import { LienReinitialisation } from '../lib/session';
 import { deconnecter } from '../lib/deconnexion';
@@ -98,29 +99,30 @@ function libelleCouverture(valeur: number | null) {
   return '';
 }
 
-const POINTS_NOUVEAUTES = [
-  { emoji: '🚀', texte: 'Test instantané : Bouton "Données d\'exemple" et modèle Excel à l\'Étape 1.' },
-  { emoji: '⚡', texte: 'Flux chaud vs Flux froid : Clarification du calcul Erlang C (Appels/Tchats vs Mails/Tickets).' },
-  { emoji: '💡', texte: 'Guide Manager : Explications simples sur l\'ETP moyen, le Hors-prod (Shrinkage) et la Charge max.' },
-  { emoji: '💾', texte: 'Persistance Supabase : Sauvegarde automatique de vos 2 liens (Historique & ETP) par compte.' },
-  { emoji: '💬', texte: 'Canal Feedback : Bouton dans le header pour remonter vos idées en 1 clic.' },
+const POINTS_NOUVEAUTES: { icone: React.ComponentProps<typeof Ionicons>['name']; titre: string; texte: string }[] = [
+  { icone: 'bar-chart-outline', titre: 'Synthèse & Export Excel : ', texte: 'Comparez les modèles (IA vs Saisonnalité) et téléchargez la fiche A4 (.xlsx) en 1 clic.' },
+  { icone: 'flash-outline', titre: 'Flux Chaud vs Froid : ', texte: 'Adaptabilité automatique des paramètres et delais cibles (20s vs 24h) selon le canal.' },
+  { icone: 'bulb-outline', titre: 'Tunnel Épuré : ', texte: 'Saisie d\'ETP moyen directement sous le plan de prod pour simplifier le parcours.' },
+  { icone: 'chatbubble-ellipses-outline', titre: 'Bouton Feedback : ', texte: 'Transmettez vos retours ou signalez un bug directement depuis le header.' },
 ];
 
 function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
-      <View style={styles.voile}>
-        <View style={styles.modale}>
-          <Text style={styles.modaleTitre}>Quoi de neuf dans Flash WFM ?</Text>
-          <Text style={styles.modaleLead}>Ce qui change pour piloter vos effectifs :</Text>
+      <View style={styles.nouveauteVoile}>
+        <View style={styles.nouveaute}>
+          <Text style={styles.nouveauteTitre}>Quoi de neuf dans Flash WFM ?</Text>
           {POINTS_NOUVEAUTES.map((point) => (
-            <View key={point.texte} style={styles.modalePoint}>
-              <Text style={styles.modalePuce}>{point.emoji}</Text>
-              <Text style={styles.modalePointTexte}>{point.texte}</Text>
+            <View key={point.titre} style={styles.nouveautePoint}>
+              <Ionicons name={point.icone} size={15} color="#1E293B" />
+              <Text style={styles.nouveauteTexte} numberOfLines={1}>
+                <Text style={styles.nouveauteFort}>{point.titre}</Text>
+                {point.texte}
+              </Text>
             </View>
           ))}
-          <TouchableOpacity style={styles.uploadBtn} onPress={onFermer}>
-            <Text style={styles.uploadBtnText}>C'est parti !</Text>
+          <TouchableOpacity style={styles.nouveauteBtn} onPress={onFermer}>
+            <Text style={styles.nouveauteBtnTexte}>C'est parti !</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -752,7 +754,7 @@ async function postApi(path: string, body: unknown, timeoutMs = 5000, token: str
       signal: controller.signal,
     });
     const texte = await response.text();
-    let data: { statut?: string; message?: string; plan?: PlanLigne[]; detail?: string } | null = null;
+    let data: { statut?: string; message?: string; plan?: PlanLigne[]; wape?: number | null; detail?: string } | null = null;
     if (texte) {
       try {
         data = JSON.parse(texte);
@@ -881,6 +883,10 @@ export default function FlashWFM() {
   const [urlHistorique, setUrlHistorique] = useState('');
   const [urlEtp, setUrlEtp] = useState('');
   const [lienEnCours, setLienEnCours] = useState<'historique' | 'etp' | null>(null);
+  const [syntheseOuverte, setSyntheseOuverte] = useState(false);
+  const [syntheseChargement, setSyntheseChargement] = useState(false);
+  const [syntheseErreur, setSyntheseErreur] = useState<string | null>(null);
+  const [comparatif, setComparatif] = useState<{ cle: string; holt: ResultatModele | null; light: ResultatModele | null } | null>(null);
   const [cachePret, setCachePret] = useState(false);
   const suspendrePersistance = useRef(false);
   const essaiActif = finEssai !== null && Date.now() < finEssai;
@@ -893,6 +899,15 @@ export default function FlashWFM() {
     return couverturesDuPlan(plan, planningActif ? etpPlanning : null, planningActif || !isPro ? null : etpMoyensAppliques);
   }, [plan, planningActif, etpPlanning, isPro, etpMoyensAppliques]);
   const periodesSansEtp = !!couvertures && planningActif && couvertures.some((ligne) => ligne.etpDispo == null);
+  const etpDispoMoyen = useMemo(() => {
+    if (planningActif && couvertures) {
+      const valeurs = couvertures.map((ligne) => ligne.etpDispo).filter((valeur): valeur is number => valeur != null);
+      const moy = moyenne(valeurs);
+      if (moy != null) return moy;
+    }
+    if (!planningActif && etpMoyensAppliques != null) return etpMoyensAppliques;
+    return null;
+  }, [planningActif, couvertures, etpMoyensAppliques]);
 
   const appliquerVierge = useCallback(() => {
     setCurrentStep(1);
@@ -1107,7 +1122,10 @@ export default function FlashWFM() {
     return () => clearTimeout(identifiant);
   }, [toast]);
 
-  const oublierPlans = () => setPlans(plansVides());
+  const oublierPlans = () => {
+    setPlans(plansVides());
+    setComparatif(null);
+  };
 
   const chargerExemple = () => {
     const lignes = historiqueExemple();
@@ -1372,6 +1390,31 @@ export default function FlashWFM() {
     setToast('API injoignable — Mode Mock Dev');
   };
 
+  const donneesHistorique = () => (dataPreview ?? []).map((row) => {
+    const values = Object.values(row ?? {});
+    return { date: values[0] ?? null, file: values[1] ?? null, volume: values[2] ?? null };
+  });
+
+  const parametresErlang = () => ({
+    volume_horaire: 0,
+    aht: parseInt(aht, 10) || 360,
+    sla_cible: parseInt(sla, 10) || 80,
+    temps_cible: parseInt(tempsCible, 10) || 20,
+    shrinkage: parseInt(shrinkage, 10) || 25,
+    heures_ouverture: parseFloat(heuresOuverture) || 8,
+    type_flux: typeFlux,
+    backlog: parseInt(backlog, 10) || 0,
+    delai_sla_jours: delaiJoursDepuisHeures(delaiTraitementHeures),
+    taux_occupation: parseInt(tauxOccupation, 10) || 85,
+  });
+
+  const cleComparatif = () => JSON.stringify({
+    horizon,
+    fichier: fileName,
+    lignes: dataPreview?.length ?? 0,
+    erlang: parametresErlang(),
+  });
+
   const handleGenerate = async () => {
     if (loading) return;
     const modeleChoisi = selectedModel ?? (__DEV__ ? 'Prophet' : null);
@@ -1400,27 +1443,13 @@ export default function FlashWFM() {
         alert('Session expirée. Veuillez vous reconnecter.');
         return;
       }
-      const donnees = (dataPreview ?? []).map((row) => {
-        const values = Object.values(row ?? {});
-        return { date: values[0] ?? null, file: values[1] ?? null, volume: values[2] ?? null };
-      });
+      const donnees = donneesHistorique();
       const modele = modeleChoisi === 'Prophet' ? 'Moyenne' : modeleChoisi === 'Holt-Winters' ? 'Holt-Winters' : 'LightGBM';
       const data = await postApi('/prevision_plan', {
         modele,
         horizon: horizonDemande,
         donnees,
-        parametres_erlang: {
-          volume_horaire: 0,
-          aht: parseInt(aht, 10) || 360,
-          sla_cible: parseInt(sla, 10) || 80,
-          temps_cible: parseInt(tempsCible, 10) || 20,
-          shrinkage: parseInt(shrinkage, 10) || 25,
-          heures_ouverture: parseFloat(heuresOuverture) || 8,
-          type_flux: typeFlux,
-          backlog: parseInt(backlog, 10) || 0,
-          delai_sla_jours: delaiJoursDepuisHeures(delaiTraitementHeures),
-          taux_occupation: parseInt(tauxOccupation, 10) || 85,
-        },
+        parametres_erlang: parametresErlang(),
       }, 60000, token);
       if (data.statut === 'succès' && Array.isArray(data.plan)) {
         setPlans((actuel) => ({ ...actuel, [horizonDemande]: data.plan ?? null }));
@@ -1444,6 +1473,70 @@ export default function FlashWFM() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const ouvrirSynthese = async () => {
+    setSyntheseOuverte(true);
+    const cle = cleComparatif();
+    if (comparatif?.cle === cle && (comparatif.holt || comparatif.light)) return;
+    setSyntheseChargement(true);
+    setSyntheseErreur(null);
+    const volumes = (dataPreview ?? [])
+      .map((row) => nombre(Object.values(row)[2]))
+      .filter((volume): volume is number => volume != null);
+    const poserMock = () => {
+      const fictif = comparatifMock(horizon, volumes);
+      setComparatif({ cle, ...fictif });
+      setToast('API injoignable — Mode Mock Dev');
+    };
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        if (__DEV__) {
+          poserMock();
+          return;
+        }
+        setSyntheseErreur('Session expirée. Veuillez vous reconnecter.');
+        return;
+      }
+      const [holt, light] = await Promise.allSettled([
+        postApi('/prevision_plan', { modele: 'Holt-Winters', horizon, donnees: donneesHistorique(), parametres_erlang: parametresErlang(), evaluer_wape: true }, 60000, token),
+        postApi('/prevision_plan', { modele: 'LightGBM', horizon, donnees: donneesHistorique(), parametres_erlang: parametresErlang(), evaluer_wape: true }, 60000, token),
+      ]);
+      const lire = (resultat: PromiseSettledResult<{ statut?: string; message?: string; plan?: PlanLigne[]; wape?: number | null }>) => {
+        if (resultat.status !== 'fulfilled') return null;
+        const data = resultat.value;
+        if (data.statut === 'succès' && Array.isArray(data.plan)) {
+          return { plan: data.plan, wape: typeof data.wape === 'number' ? data.wape : null };
+        }
+        return null;
+      };
+      const holtOk = lire(holt);
+      const lightOk = lire(light);
+      if (!holtOk && !lightOk) {
+        const messageApi = holt.status === 'fulfilled' ? holt.value.message : light.status === 'fulfilled' ? light.value.message : '';
+        const motif = holt.status === 'rejected' ? holt.reason : light.status === 'rejected' ? light.reason : new Error(messageApi || 'Comparaison impossible.');
+        if (__DEV__ && (echecApiSimulable(motif) || motif instanceof ErreurApi)) {
+          poserMock();
+          return;
+        }
+        setComparatif(null);
+        setSyntheseErreur(motif instanceof Error ? motif.message : 'Comparaison impossible.');
+        return;
+      }
+      setComparatif({ cle, holt: holtOk, light: lightOk });
+      if (!holtOk || !lightOk) setSyntheseErreur('Un des deux modèles n’a pas pu être calculé. Le comparatif affiche le modèle disponible.');
+    } catch (error) {
+      console.error(error);
+      if (__DEV__ && echecApiSimulable(error)) {
+        poserMock();
+        return;
+      }
+      setSyntheseErreur(error instanceof Error ? error.message : 'Comparaison impossible.');
+    } finally {
+      setSyntheseChargement(false);
     }
   };
 
@@ -1581,7 +1674,10 @@ export default function FlashWFM() {
                 </TouchableOpacity>
               </ZoneImport>
               <View style={styles.encartInfo}>
-                <Text style={styles.encartInfoTexte}>💡 Import de planning optionnel : Si vous n'avez pas de planning heure par heure, cliquez sur "Passer cette étape". Vous pourrez ajuster votre ETP moyen directement sur le plan de production.</Text>
+                <View style={styles.fluxMessageLigne}>
+                  <Ionicons name="information-circle-outline" size={18} color="#1E293B" />
+                  <Text style={styles.encartInfoTexte}>Import de planning optionnel : Si vous n'avez pas de planning jour par jour, cliquez sur "Passer cette étape". Vous pourrez ajuster votre ETP moyen directement sur le plan de production.</Text>
+                </View>
               </View>
               {etpFileName && (etpBrouillon?.length || etpPlanning?.length) ? (
                 <View style={styles.successBox}>
@@ -1616,11 +1712,14 @@ export default function FlashWFM() {
                 </TouchableOpacity>
               </View>
               <View nativeID="tour-leviers" style={tourIndex === 2 ? styles.tourCible : undefined}>
-              <Text style={styles.fluxMessage}>
-                {typeFlux === 'chaud'
-                  ? '⚡ Flux chaud : Calcul Erlang C basé sur votre objectif de décroché en temps réel.'
-                  : '📬 Flux froid : Calcul de charge linéaire lissé selon votre délai de traitement cible.'}
-              </Text>
+              <View style={styles.fluxMessageLigne}>
+                <Ionicons name={typeFlux === 'chaud' ? 'flash-outline' : 'mail-outline'} size={16} color="#1E293B" />
+                <Text style={styles.fluxMessage}>
+                  {typeFlux === 'chaud'
+                    ? 'Flux chaud : Calcul Erlang C basé sur votre objectif de décroché en temps réel.'
+                    : 'Flux froid : Calcul de charge linéaire lissé selon votre délai de traitement cible.'}
+                </Text>
+              </View>
               <View style={[styles.paramGrid, styles.paramGridLigne, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12 } as never) : null]}>
                 <ChampParam dense label="DMT (s)" info="Durée Moyenne de Traitement : Temps de communication + temps de gestion post-appel (ACW)." value={aht} onChangeText={changerParam(setAht)} />
                 {typeFlux === 'chaud' ? (
@@ -1712,9 +1811,15 @@ export default function FlashWFM() {
                   <CombinedChart points={plan.map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
                   <View style={styles.planHeader}>
                     <Text style={styles.planHeaderTitle}>Plan de production</Text>
-                    <TouchableOpacity style={[styles.exportBtn, !isPro && styles.modelBtnLocked]} onPress={handleExport}>
-                      <Text style={styles.exportBtnText}>Exporter en Excel</Text>
-                    </TouchableOpacity>
+                    <View style={styles.planActions}>
+                      <TouchableOpacity style={styles.syntheseBtn} onPress={() => { void ouvrirSynthese(); }}>
+                        <Ionicons name="bar-chart-outline" size={16} color="#F4C430" />
+                        <Text style={styles.syntheseBtnText}>Synthèse & Comparatif</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.exportBtn, !isPro && styles.modelBtnLocked]} onPress={handleExport}>
+                        <Text style={styles.exportBtnText}>Exporter en Excel</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                   {planningActif ? <Text style={styles.hint}>Écart et couverture calculés à partir du planning ETP importé.</Text> : null}
                   {periodesSansEtp ? <Text style={styles.hint}>Certaines périodes du plan n’ont pas de correspondance dans le fichier ETP.</Text> : null}
@@ -1761,6 +1866,24 @@ export default function FlashWFM() {
       ) : null}
       {tourIndex != null ? <TourGuide index={tourIndex} onSuivant={avancerTour} onPasser={terminerTour} /> : null}
       <ModaleNouveautes visible={nouveautesOuvertes} onFermer={fermerNouveautes} />
+      <SyntheseExecutive
+        visible={syntheseOuverte}
+        chargement={syntheseChargement}
+        erreur={syntheseErreur}
+        onFermer={() => setSyntheseOuverte(false)}
+        typeFlux={typeFlux}
+        aht={aht}
+        sla={sla}
+        tempsCible={tempsCible}
+        delaiTraitementHeures={delaiTraitementHeures}
+        tauxOccupation={tauxOccupation}
+        shrinkage={shrinkage}
+        heuresOuverture={heuresOuverture}
+        etpDispo={etpDispoMoyen}
+        planning={planningActif ? etpPlanning : null}
+        holt={comparatif?.holt ?? null}
+        light={comparatif?.light ?? null}
+      />
       <ModaleFeedback
         visible={feedbackOuvert}
         type={typeRetour}
@@ -1775,6 +1898,19 @@ export default function FlashWFM() {
   );
 }
 
+function comparatifMock(horizonDemande: Horizon, volumes: number[]) {
+  const base = planMock(horizonDemande, volumes);
+  const varier = (facteur: number, wape: number): ResultatModele => ({
+    wape,
+    plan: base.map((ligne) => ({
+      ...ligne,
+      volume_prevu: Math.max(0, Math.round(ligne.volume_prevu * facteur)),
+      etp_moyen_requis: Math.max(1, Math.round(ligne.etp_moyen_requis * facteur * 10) / 10),
+    })),
+  });
+  return { holt: varier(1.08, 18.6), light: varier(0.94, 12.4) };
+}
+
 function delaiJoursDepuisHeures(heures: string) {
   const valeur = parseFloat(heures);
   if (!Number.isFinite(valeur) || valeur <= 0) return 1;
@@ -1787,40 +1923,49 @@ function moyenne(valeurs: number[]) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  container: { flex: 1, backgroundColor: '#F8FAFC', fontFamily: 'Inter, system-ui, sans-serif' },
   headerContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 20, gap: 12, flexWrap: 'wrap' },
   headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  logoBadge: { backgroundColor: '#0F2D46', padding: 10, borderRadius: 12, borderWidth: 1.5, borderColor: '#F4C430', alignItems: 'center', justifyContent: 'center' },
+  logoBadge: { backgroundColor: '#0F2D46', padding: 10, borderRadius: 8, borderWidth: 1.5, borderColor: '#F4C430', alignItems: 'center', justifyContent: 'center' },
   headerTextContainer: { alignItems: 'flex-start' },
-  brandTitle: { fontSize: 26, fontWeight: '900', color: '#0F2D46', letterSpacing: 1 },
+  brandTitle: { fontSize: 26, fontWeight: '700', color: '#0F2D46', letterSpacing: 1 },
   brandTitleSub: { color: '#F4C430', fontWeight: '300' },
   brandByline: { fontSize: 12, color: '#687581', fontWeight: '500', marginTop: 1 },
-  brandSubtitle: { fontSize: 11, color: '#687581', fontWeight: 'bold', letterSpacing: 1.5, marginTop: 2 },
+  brandSubtitle: { fontSize: 11, color: '#687581', fontWeight: '500', letterSpacing: 1.5, marginTop: 2 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   logoutBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#0F2D46', justifyContent: 'center' },
   resetBtn: { paddingHorizontal: 8, paddingVertical: 6 },
   resetText: { color: '#94A3B8', fontSize: 12, fontWeight: '600' },
-  devBadge: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 6 },
+  devBadge: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 },
   devBadgePro: { backgroundColor: '#1F7A4D' },
   devBadgeFree: { backgroundColor: '#A33B32' },
-  devBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  devBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '600' },
   logoutText: { color: '#0F2D46', fontSize: 12, fontWeight: '700' },
   voile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  modale: { width: '100%', maxWidth: 560, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
-  modaleTitre: { fontSize: 20, fontWeight: '800', color: '#0F2D46' },
+  modale: { width: '100%', maxWidth: 560, backgroundColor: '#FFFFFF', borderRadius: 8, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
+  nouveauteVoile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 12 },
+  nouveaute: { width: '100%', maxWidth: 640, backgroundColor: '#FFFFFF', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 10, gap: 4, borderWidth: 1, borderColor: '#E2E8F0' },
+  nouveauteTitre: { fontSize: 15, fontWeight: '600', color: '#0F2D46', marginBottom: 2 },
+  nouveautePoint: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  nouveautePuce: { fontSize: 12, lineHeight: 15 },
+  nouveauteTexte: { flex: 1, color: '#0F2D46', fontSize: 10.5, lineHeight: 14 },
+  nouveauteFort: { fontWeight: '600' },
+  nouveauteBtn: { backgroundColor: '#F4C430', borderRadius: 8, paddingVertical: 8, alignItems: 'center', marginTop: 4 },
+  nouveauteBtnTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  modaleTitre: { fontSize: 20, fontWeight: '600', color: '#0F2D46' },
   modaleLead: { color: '#687581', fontSize: 14, lineHeight: 20 },
   modalePoint: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
-  modalePuce: { color: '#F4C430', fontSize: 18, fontWeight: '800', lineHeight: 22 },
+  modalePuce: { color: '#F4C430', fontSize: 18, fontWeight: '600', lineHeight: 22 },
   modalePointTexte: { flex: 1, color: '#0F2D46', fontSize: 15, lineHeight: 22 },
   modaleFermer: { alignItems: 'center', paddingVertical: 4 },
   puces: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  puce: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#FFFFFF' },
+  puce: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#FFFFFF' },
   puceActive: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
   puceTexte: { color: '#0F2D46', fontSize: 13, fontWeight: '700' },
   puceTexteActif: { color: '#FFFFFF' },
-  feedbackSaisie: { minHeight: 120, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#0F2D46', textAlignVertical: 'top' },
-  card: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 2, elevation: 1 },
-  stepText: { fontSize: 18, color: '#0F2D46', marginBottom: 8, fontWeight: 'bold' },
+  feedbackSaisie: { minHeight: 120, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#1E293B', textAlignVertical: 'top' },
+  card: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  stepText: { fontSize: 18, color: '#0F2D46', marginBottom: 8, fontWeight: '700' },
   lead: { color: '#687581', fontSize: 14, lineHeight: 20, marginBottom: 16 },
   importBloc: { width: '100%', gap: 12 },
   importTabs: { flexDirection: 'row', gap: 8 },
@@ -1829,42 +1974,45 @@ const styles = StyleSheet.create({
   importTabText: { color: '#0F2D46', fontWeight: '700', fontSize: 13, textAlign: 'center' },
   importTabTextOn: { color: '#FFFFFF' },
   lienBloc: { width: '100%', gap: 8 },
-  lienInput: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', height: 46, paddingHorizontal: 12, borderRadius: 8, fontSize: 15, color: '#0F2D46', width: '100%' },
-  uploadBtn: { backgroundColor: '#F4C430', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 8, width: '100%', alignItems: 'center' },
-  uploadBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold' },
-  successBox: { marginTop: 16, backgroundColor: '#F7F6F1', padding: 15, borderRadius: 8, width: '100%' },
-  successText: { color: '#0F2D46', fontWeight: 'bold' },
-  nextBtn: { marginTop: 16, backgroundColor: '#0F2D46', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' },
-  nextBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  lienInput: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', height: 40, paddingHorizontal: 16, borderRadius: 8, fontSize: 14, color: '#1E293B', width: '100%' },
+  uploadBtn: { backgroundColor: '#F4C430', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, width: '100%', alignItems: 'center', justifyContent: 'center' },
+  uploadBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  successBox: { marginTop: 16, backgroundColor: '#F8FAFC', padding: 15, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', width: '100%' },
+  successText: { color: '#1E293B', fontWeight: '600' },
+  nextBtn: { marginTop: 16, backgroundColor: '#0F2D46', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  nextBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600', textAlign: 'center' },
   backBtn: { alignSelf: 'flex-start', paddingBottom: 8 },
-  backBtnText: { color: '#687581', fontWeight: 'bold', fontSize: 16 },
-  secondaryBtn: { marginTop: 16, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#0F2D46', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' },
-  secondaryBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  backBtnText: { color: '#687581', fontWeight: '600', fontSize: 14 },
+  secondaryBtn: { marginTop: 16, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  secondaryBtnText: { color: '#1E293B', fontSize: 14, fontWeight: '600', textAlign: 'center' },
   actionRow: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
   actionBtn: { flexGrow: 1, flexBasis: 220 },
-  modelBtn: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', padding: 15, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  modelBtn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   modelBtnLocked: { opacity: 0.55 },
-  proBadge: { backgroundColor: '#F4C430', color: '#0F2D46', fontSize: 11, fontWeight: '800', overflow: 'hidden', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  proBadge: { backgroundColor: '#F4C430', color: '#0F2D46', fontSize: 11, fontWeight: '600', overflow: 'hidden', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
   modalBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15, 45, 70, 0.45)', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 20 },
-  modalCard: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 24, width: '100%', maxWidth: 420 },
+  modalCard: { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 24, width: '100%', maxWidth: 420 },
   modalTitle: { color: '#0F2D46', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 },
   modelBtnActive: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
   modelBtnText: { color: '#0F2D46', fontWeight: '600', fontSize: 14, textAlign: 'center' },
-  modelBtnTextActive: { color: '#F4C430', fontWeight: 'bold' },
-  generateBtn: { marginTop: 10, backgroundColor: '#7FC8C0', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center', justifyContent: 'center', minHeight: 50 },
+  modelBtnTextActive: { color: '#F4C430', fontWeight: '600' },
+  generateBtn: { marginTop: 10, backgroundColor: '#7FC8C0', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', minHeight: 40 },
   generateBtnDisabled: { opacity: 0.7 },
-  generateBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  generateBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '600', textAlign: 'center' },
   horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 8 },
-  horizonBtn: { flex: 1, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', paddingVertical: 14, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  horizonBtn: { flex: 1, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 136 },
   dash: { width: '100%', maxWidth: 1100, alignItems: 'stretch' },
-  panel: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', marginBottom: 16, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 2, elevation: 1 },
-  panelTitle: { fontSize: 18, color: '#0F2D46', fontWeight: 'bold', marginBottom: 12 },
+  panel: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', marginBottom: 16, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  panelTitle: { fontSize: 18, color: '#0F2D46', fontWeight: '700', marginBottom: 12 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   planHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 16, marginBottom: 12, gap: 12 },
-  planHeaderTitle: { fontSize: 18, color: '#0F2D46', fontWeight: 'bold' },
-  exportBtn: { backgroundColor: '#F4C430', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8 },
-  exportBtnText: { color: '#0F2D46', fontWeight: 'bold', fontSize: 14 },
+  planHeaderTitle: { fontSize: 18, color: '#0F2D46', fontWeight: '700' },
+  planActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' },
+  syntheseBtn: { backgroundColor: '#0F2D46', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  syntheseBtnText: { color: '#F4C430', fontWeight: '600', fontSize: 14 },
+  exportBtn: { backgroundColor: '#F4C430', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, justifyContent: 'center' },
+  exportBtnText: { color: '#0F2D46', fontWeight: '600', fontSize: 14 },
   paramGrid: { flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'flex-start', gap: 12, width: '100%', marginTop: 16 },
   paramGridLigne: { flexWrap: 'nowrap' },
   paramField: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, position: 'relative' },
@@ -1875,25 +2023,26 @@ const styles = StyleSheet.create({
   lienDiscret: { color: '#94A3B8', fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' },
   exempleBtn: { borderWidth: 1, borderColor: '#0F2D46', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14 },
   exempleBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '700' },
-  tourCible: { borderWidth: 2, borderColor: '#F4C430', borderRadius: 16, padding: 8 },
+  tourCible: { borderWidth: 2, borderColor: '#F4C430', borderRadius: 8, padding: 8 },
   tourDock: { position: 'absolute', left: 16, right: 16, bottom: 108, alignItems: 'center', zIndex: 40 },
-  tourCarte: { width: '100%', maxWidth: 440, backgroundColor: '#0F2D46', borderRadius: 14, padding: 16, gap: 8 },
-  tourKicker: { color: '#F4C430', fontSize: 12, fontWeight: '800' },
-  tourTitre: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+  tourCarte: { width: '100%', maxWidth: 440, backgroundColor: '#0F2D46', borderRadius: 8, padding: 16, gap: 8 },
+  tourKicker: { color: '#F4C430', fontSize: 12, fontWeight: '600' },
+  tourTitre: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   tourTexte: { color: '#E2E8F0', fontSize: 14, lineHeight: 20 },
   tourActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 4 },
   tourPasser: { color: '#94A3B8', fontSize: 13, fontWeight: '700' },
   tourSuivant: { backgroundColor: '#F4C430', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
-  tourSuivantTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '800' },
-  encartInfo: { marginTop: 12, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, padding: 14, gap: 12 },
-  encartInfoTexte: { color: '#0F2D46', fontSize: 14, lineHeight: 21 },
-  fluxMessage: { color: '#0F2D46', fontSize: 14, lineHeight: 20, marginTop: 4, marginBottom: 4 },
+  tourSuivantTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  encartInfo: { marginTop: 12, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, padding: 14, gap: 12 },
+  encartInfoTexte: { color: '#1E293B', fontSize: 14, lineHeight: 21, flex: 1 },
+  fluxMessageLigne: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 4 },
+  fluxMessage: { color: '#1E293B', fontSize: 14, lineHeight: 20, flex: 1 },
   paramFieldDense: { flexBasis: 0, minWidth: 0, flexGrow: 1, flexShrink: 1, alignSelf: 'stretch' },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5, minHeight: 24 },
-  labelInline: { color: '#0F2D46', fontWeight: 'bold' },
+  labelInline: { color: '#1E293B', fontWeight: '500' },
   labelDense: { fontSize: 12, flexShrink: 1 },
   infoIcon: { width: 16, height: 16, flexShrink: 0 },
-  paramInput: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', height: 46, paddingHorizontal: 12, borderRadius: 8, fontSize: 16, color: '#0F2D46', width: '100%' },
+  paramInput: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', height: 40, paddingHorizontal: 16, borderRadius: 8, fontSize: 14, color: '#1E293B', width: '100%' },
   paramInputDense: { paddingHorizontal: 8, marginTop: 'auto' },
   modelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, width: '100%', marginTop: 16 },
   modelBtnDash: { flexGrow: 1, flexShrink: 1, flexBasis: 220, minWidth: 180 },
@@ -1913,41 +2062,41 @@ const styles = StyleSheet.create({
   stepDot: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#C5CDD6', alignItems: 'center', justifyContent: 'center' },
   stepDotOn: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
   stepDotDone: { backgroundColor: '#7FC8C0', borderColor: '#7FC8C0' },
-  stepNum: { color: '#687581', fontWeight: '800' },
+  stepNum: { color: '#687581', fontWeight: '600' },
   stepNumOn: { color: '#F4C430' },
   stepNumDone: { color: '#0F2D46' },
   panelTitleInline: { marginBottom: 0 },
-  stepCaption: { fontSize: 12, color: '#687581', fontWeight: '700', textAlign: 'center' },
+  stepCaption: { fontSize: 12, color: '#687581', fontWeight: '500', textAlign: 'center' },
   stepCaptionOn: { color: '#0F2D46' },
-  dropZone: { borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#0F2D46', borderRadius: 12, padding: 22, alignItems: 'center', backgroundColor: '#F7F6F1', gap: 8 },
-  dropTitle: { color: '#0F2D46', fontWeight: '800', fontSize: 15, textAlign: 'center' },
+  dropZone: { borderWidth: 1, borderStyle: 'dashed', borderColor: '#E2E8F0', borderRadius: 8, padding: 22, alignItems: 'center', backgroundColor: '#FFFFFF', gap: 8 },
+  dropTitle: { color: '#0F2D46', fontWeight: '600', fontSize: 15, textAlign: 'center' },
   fluxRow: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
-  fluxCard: { flexGrow: 1, flexBasis: 280, minHeight: 132, backgroundColor: '#F7F6F1', borderRadius: 12, borderWidth: 2, borderColor: '#E6E9EE', padding: 18, justifyContent: 'center' },
+  fluxCard: { flexGrow: 1, flexBasis: 280, minHeight: 112, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', padding: 16, justifyContent: 'center', shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   fluxCardOn: { backgroundColor: '#0F2D46', borderColor: '#F4C430' },
-  fluxTitle: { fontSize: 16, fontWeight: '800', color: '#0F2D46', marginBottom: 8 },
+  fluxTitle: { fontSize: 16, fontWeight: '600', color: '#0F2D46', marginBottom: 8 },
   fluxTitleOn: { color: '#FFFFFF' },
   fluxDetail: { color: '#687581', fontSize: 14, lineHeight: 20 },
   fluxDetailOn: { color: '#F4C430' },
   resultat: { marginTop: 20 },
   statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16 },
-  statCard: { flexGrow: 1, flexBasis: 160, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', padding: 14 },
-  statLabel: { color: '#64748B', fontSize: 12, fontWeight: '700', marginBottom: 4 },
-  statValue: { color: '#0F2D46', fontSize: 22, fontWeight: '800' },
+  statCard: { flexGrow: 1, flexBasis: 160, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', padding: 14 },
+  statLabel: { color: '#64748B', fontSize: 12, fontWeight: '500', marginBottom: 4 },
+  statValue: { color: '#0F2D46', fontSize: 22, fontWeight: '600' },
   kpiHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 },
-  kpiBadge: { overflow: 'hidden', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, fontSize: 11, fontWeight: '800' },
+  kpiBadge: { overflow: 'hidden', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, fontSize: 11, fontWeight: '600' },
   kpiBadgeOk: { backgroundColor: '#DCFCE7', color: '#166534' },
   kpiBadgeBas: { backgroundColor: '#FEE2E2', color: '#991B1B' },
   kpiBadgeHaut: { backgroundColor: '#FFEDD5', color: '#9A3412' },
   footer: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingHorizontal: 16, paddingVertical: 12 },
   footerInner: { width: '100%', maxWidth: 1100, alignSelf: 'center', flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
-  footerBack: { borderWidth: 1, borderColor: '#0F2D46', backgroundColor: '#FFFFFF', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 22, minWidth: 140, alignItems: 'center' },
-  footerBackText: { color: '#0F2D46', fontWeight: '700', fontSize: 15 },
-  footerNext: { backgroundColor: '#0F2D46', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 22, minWidth: 180, alignItems: 'center', justifyContent: 'center' },
-  footerNextText: { color: '#F4C430', fontWeight: '800', fontSize: 15 },
-  toast: { position: 'absolute', left: 16, right: 16, bottom: 84, alignSelf: 'center', maxWidth: 420, backgroundColor: '#0F2D46', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 },
+  footerBack: { borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, minWidth: 140, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  footerBackText: { color: '#1E293B', fontWeight: '600', fontSize: 14 },
+  footerNext: { backgroundColor: '#0F2D46', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, minWidth: 180, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  footerNextText: { color: '#F4C430', fontWeight: '600', fontSize: 14 },
+  toast: { position: 'absolute', left: 16, right: 16, bottom: 84, alignSelf: 'center', maxWidth: 420, backgroundColor: '#0F2D46', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10 },
   toastText: { color: '#F8FAFC', fontSize: 13, fontWeight: '600', textAlign: 'center' },
   ajustBloc: { marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#E6E9EE' },
-  ajustTitre: { color: '#0F2D46', fontSize: 16, fontWeight: '800' },
+  ajustTitre: { color: '#0F2D46', fontSize: 16, fontWeight: '600' },
   ajustRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', marginTop: 8 },
   ajustChamp: { width: 300, maxWidth: '100%', flexDirection: 'row', flexGrow: 0 },
   ajustBtn: { width: 'auto', minWidth: 150, marginTop: 0, marginBottom: 0, alignSelf: 'flex-end' },
