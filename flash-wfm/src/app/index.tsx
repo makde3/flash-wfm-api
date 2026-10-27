@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { LienReinitialisation } from '../lib/session';
 import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
-import { enregistrerLienSource, lireLienSource } from '../lib/sourceProfil';
+import { enregistrerLienEtp, enregistrerLienSource, lireLiensProfil } from '../lib/sourceProfil';
 import { enregistrerResetWizard } from '../lib/wizardStore';
 import {
   couverturesDuPlan,
@@ -827,13 +827,17 @@ export default function FlashWFM() {
     suspendrePersistance.current = true;
     appliquerVierge();
     setCachePret(false);
-    Promise.all([cacheDuProprietaire(userId), lireLienSource(userId)]).then(([cache, lien]) => {
+    Promise.all([cacheDuProprietaire(userId), lireLiensProfil(userId)]).then(([cache, liens]) => {
       if (ignore) return;
       if (cache) appliquerCache({ ...cache, currentStep: 1 });
       else appliquerVierge();
-      if (lien && /^https?:\/\//i.test(lien)) {
-        setUrlHistorique(lien);
+      if (liens.historique) {
+        setUrlHistorique(liens.historique);
         setSourceHistorique('lien');
+      }
+      if (liens.etp) {
+        setUrlEtp(liens.etp);
+        setSourceEtp('lien');
       }
       suspendrePersistance.current = false;
       setCachePret(true);
@@ -1053,6 +1057,7 @@ export default function FlashWFM() {
       setEtpBrouillon(planning);
       setEtpPlanning(null);
       setEtpStatut('vide');
+      if (userId) void enregistrerLienEtp(userId, url);
     } catch (error) {
       console.error(error);
       alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur pour lire ce lien.');
@@ -1099,6 +1104,7 @@ export default function FlashWFM() {
     }
     setEtpPlanning(etpBrouillon);
     setEtpStatut('valide');
+    if (userId && etpFileName && /^https?:\/\//i.test(etpFileName)) void enregistrerLienEtp(userId, etpFileName);
     avancer(3);
   };
 
