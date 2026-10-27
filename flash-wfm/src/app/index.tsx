@@ -6,6 +6,7 @@ import * as XLSX from 'xlsx';
 import * as XLSXStyle from 'xlsx-js-style';
 import CombinedChart from '../components/CombinedChart';
 import { useAuth } from '../context/AuthContext';
+import { LienReinitialisation } from '../lib/session';
 import { supabase } from '../lib/supabase';
 import {
   couverturesDuPlan,
@@ -636,6 +637,69 @@ async function lireFeuille(uri: string) {
   return XLSX.utils.sheet_to_json(worksheet) as Record<string, unknown>[];
 }
 
+type SourceImport = 'fichier' | 'lien';
+
+async function importerUrl(url: string) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) throw new ErreurApi(401, 'Session expirée. Veuillez vous reconnecter.');
+  const data = await postApi('/import', { url }, 20000, token) as { lignes?: Record<string, unknown>[] };
+  if (!Array.isArray(data.lignes)) {
+    throw new ErreurApi(400, 'Format invalide. Le fichier doit être un CSV ou un classeur Excel (.xlsx).');
+  }
+  return data.lignes;
+}
+
+function ZoneImport({
+  mode,
+  onMode,
+  url,
+  onUrl,
+  onValider,
+  enCours,
+  children,
+}: {
+  mode: SourceImport;
+  onMode: (mode: SourceImport) => void;
+  url: string;
+  onUrl: (valeur: string) => void;
+  onValider: () => void;
+  enCours: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={styles.importBloc}>
+      <View style={styles.importTabs}>
+        <TouchableOpacity style={[styles.importTab, mode === 'fichier' && styles.importTabOn]} onPress={() => onMode('fichier')}>
+          <Text style={[styles.importTabText, mode === 'fichier' && styles.importTabTextOn]}>Fichier local</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.importTab, mode === 'lien' && styles.importTabOn]} onPress={() => onMode('lien')}>
+          <Text style={[styles.importTabText, mode === 'lien' && styles.importTabTextOn]}>Lien Web (Sheets / 365)</Text>
+        </TouchableOpacity>
+      </View>
+      {mode === 'fichier' ? children : (
+        <View style={styles.lienBloc}>
+          <TextInput
+            style={styles.lienInput}
+            value={url}
+            onChangeText={onUrl}
+            placeholder="https://docs.google.com/spreadsheets/d/..."
+            placeholderTextColor="#94A3B8"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            editable={!enCours}
+          />
+          <Text style={styles.hint}>Note : Le document doit être accessible en lecture avec le lien de partage.</Text>
+          <TouchableOpacity style={[styles.uploadBtn, enCours && styles.generateBtnDisabled]} onPress={onValider} disabled={enCours}>
+            {enCours ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.uploadBtnText}>Importer le lien</Text>}
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function FlashWFM() {
   const cache = useState(lireCache)[0];
   const [currentStep, setCurrentStep] = useState<Etape>(cache?.currentStep ?? 1);
@@ -666,6 +730,11 @@ export default function FlashWFM() {
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [sourceHistorique, setSourceHistorique] = useState<SourceImport>('fichier');
+  const [sourceEtp, setSourceEtp] = useState<SourceImport>('fichier');
+  const [urlHistorique, setUrlHistorique] = useState('');
+  const [urlEtp, setUrlEtp] = useState('');
+  const [lienEnCours, setLienEnCours] = useState<'historique' | 'etp' | null>(null);
   const essaiActif = finEssai !== null && Date.now() < finEssai;
   const moyenneDisponible = isPro || finEssai === null || essaiActif;
   const plan = plans[horizon];
@@ -850,6 +919,66 @@ export default function FlashWFM() {
       console.error(error);
       setDataPreview(null);
       alert('Erreur lors de la lecture du fichier Excel.');
+    }
+  };
+
+  const importerHistoriqueLien = async () => {
+    const url = urlHistorique.trim();
+    if (!url) {
+      alert('Indiquez le lien du document.');
+      return;
+    }
+    setLienEnCours('historique');
+    try {
+      const jsonData = await importerUrl(url);
+      if (!historiqueExploitable(jsonData)) {
+        setDataPreview(null);
+        setFileName(null);
+        alert('Format invalide. Votre fichier Excel doit contenir au moins 3 colonnes : Col 1 = Date | Col 2 = File/Activité | Col 3 = Volume. La DMT peut être en colonne 4.');
+        return;
+      }
+      setFileName(url);
+      setDataPreview(jsonData);
+      oublierPlans();
+      const moyenneDmt = dmtMoyenHistorique(jsonData);
+      if (moyenneDmt != null) setAht(String(moyenneDmt));
+    } catch (error) {
+      console.error(error);
+      setDataPreview(null);
+      setFileName(null);
+      alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur pour lire ce lien.');
+    } finally {
+      setLienEnCours(null);
+    }
+  };
+
+  const importerEtpLien = async () => {
+    if (!isPro) {
+      setModalePro(true);
+      return;
+    }
+    const url = urlEtp.trim();
+    if (!url) {
+      alert('Indiquez le lien du document.');
+      return;
+    }
+    setLienEnCours('etp');
+    try {
+      const jsonData = await importerUrl(url);
+      const planning = parserPlanningEtp(jsonData);
+      if (planning.length === 0) {
+        alert('Format invalide. Le planning ETP doit contenir une date et un effectif : Col 1 = Date | Col 2 = ETP.');
+        return;
+      }
+      setEtpFileName(url);
+      setEtpBrouillon(planning);
+      setEtpPlanning(null);
+      setEtpStatut('vide');
+    } catch (error) {
+      console.error(error);
+      alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur pour lire ce lien.');
+    } finally {
+      setLienEnCours(null);
     }
   };
 
@@ -1098,12 +1227,14 @@ export default function FlashWFM() {
             <View style={styles.card}>
               <Text style={styles.stepText}>Étape 1 : Import historique</Text>
               <Text style={styles.lead}>Historique de volumes et de DMT. Colonnes attendues : Date, file ou activité, volume. La DMT en secondes peut occuper la 4e colonne.</Text>
-              <TouchableOpacity style={styles.uploadBtn} onPress={pickDocument}>
-                <Text style={styles.uploadBtnText}>+ Importer un fichier Excel</Text>
-              </TouchableOpacity>
+              <ZoneImport mode={sourceHistorique} onMode={setSourceHistorique} url={urlHistorique} onUrl={setUrlHistorique} onValider={importerHistoriqueLien} enCours={lienEnCours === 'historique'}>
+                <TouchableOpacity style={styles.uploadBtn} onPress={pickDocument}>
+                  <Text style={styles.uploadBtnText}>+ Importer un fichier Excel</Text>
+                </TouchableOpacity>
+              </ZoneImport>
               {fileName && dataPreview ? (
                 <View style={styles.successBox}>
-                  <Text style={styles.successText}>Fichier sélectionné : {fileName}</Text>
+                  <Text style={styles.successText} numberOfLines={2}>{fileName.startsWith('http') ? 'Lien importé' : 'Fichier sélectionné'} : {fileName}</Text>
                   <Text style={styles.hint}>{dataPreview.length.toLocaleString('fr-FR')} ligne(s){dmtFichier != null ? ` · DMT moyenne ${dmtFichier.toLocaleString('fr-FR')} s` : ' · DMT non détectée, à saisir à l’étape 3'}</Text>
                 </View>
               ) : null}
@@ -1117,14 +1248,16 @@ export default function FlashWFM() {
                 <Text style={styles.proBadge}>Pro</Text>
               </View>
               <Text style={styles.lead}>Optionnel. Importez les ETP réellement présents pour calculer l’écart et la couverture, jour par jour.</Text>
-              <TouchableOpacity style={[styles.dropZone, !isPro && styles.modelBtnLocked]} onPress={pickEtp}>
-                <Ionicons name="document-attach-outline" size={28} color="#0F2D46" />
-                <Text style={styles.dropTitle}>Importer votre planning d'ETP présent jour par jour (.xlsx)</Text>
-                <Text style={styles.hint}>Colonne 1 = date, colonne 2 = ETP. Les dates sont rapprochées du plan : jour par jour en court terme, moyenne du mois en long terme.</Text>
-              </TouchableOpacity>
+              <ZoneImport mode={sourceEtp} onMode={setSourceEtp} url={urlEtp} onUrl={setUrlEtp} onValider={importerEtpLien} enCours={lienEnCours === 'etp'}>
+                <TouchableOpacity style={[styles.dropZone, !isPro && styles.modelBtnLocked]} onPress={pickEtp}>
+                  <Ionicons name="document-attach-outline" size={28} color="#0F2D46" />
+                  <Text style={styles.dropTitle}>Importer votre planning d'ETP présent jour par jour (.xlsx)</Text>
+                  <Text style={styles.hint}>Colonne 1 = date, colonne 2 = ETP. Les dates sont rapprochées du plan : jour par jour en court terme, moyenne du mois en long terme.</Text>
+                </TouchableOpacity>
+              </ZoneImport>
               {etpFileName && (etpBrouillon?.length || etpPlanning?.length) ? (
                 <View style={styles.successBox}>
-                  <Text style={styles.successText}>{etpStatut === 'valide' ? 'Planning validé' : 'Fichier prêt à valider'} : {etpFileName}</Text>
+                  <Text style={styles.successText} numberOfLines={2}>{etpStatut === 'valide' ? 'Planning validé' : 'Fichier prêt à valider'} : {etpFileName}</Text>
                   <Text style={styles.hint}>{(etpBrouillon ?? etpPlanning)?.length.toLocaleString('fr-FR')} jour(s) reconnu(s)</Text>
                 </View>
               ) : null}
@@ -1279,6 +1412,7 @@ export default function FlashWFM() {
             {loading && currentStep === 4 ? <ActivityIndicator color="#F4C430" /> : <Text style={styles.footerNextText}>{currentStep === 4 ? (plan ? 'Recalculer' : 'Générer le plan') : 'Étape suivante'}</Text>}
           </TouchableOpacity>
         </View>
+        <LienReinitialisation />
       </View>
       {toast ? (
         <View style={styles.toast}>
@@ -1327,6 +1461,14 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 2, elevation: 1 },
   stepText: { fontSize: 18, color: '#0F2D46', marginBottom: 8, fontWeight: 'bold' },
   lead: { color: '#687581', fontSize: 14, lineHeight: 20, marginBottom: 16 },
+  importBloc: { width: '100%', gap: 12 },
+  importTabs: { flexDirection: 'row', gap: 8 },
+  importTab: { flex: 1, minHeight: 42, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  importTabOn: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
+  importTabText: { color: '#0F2D46', fontWeight: '700', fontSize: 13, textAlign: 'center' },
+  importTabTextOn: { color: '#FFFFFF' },
+  lienBloc: { width: '100%', gap: 8 },
+  lienInput: { backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', height: 46, paddingHorizontal: 12, borderRadius: 8, fontSize: 15, color: '#0F2D46', width: '100%' },
   uploadBtn: { backgroundColor: '#F4C430', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 8, width: '100%', alignItems: 'center' },
   uploadBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold' },
   successBox: { marginTop: 16, backgroundColor: '#F7F6F1', padding: 15, borderRadius: 8, width: '100%' },
@@ -1353,7 +1495,7 @@ const styles = StyleSheet.create({
   generateBtnText: { color: '#0F2D46', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 8 },
   horizonBtn: { flex: 1, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', paddingVertical: 14, paddingHorizontal: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 108 },
+  dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 136 },
   dash: { width: '100%', maxWidth: 1100, alignItems: 'stretch' },
   panel: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', marginBottom: 16, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 2, elevation: 1 },
   panelTitle: { fontSize: 18, color: '#0F2D46', fontWeight: 'bold', marginBottom: 12 },

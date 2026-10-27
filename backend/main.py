@@ -1,7 +1,12 @@
+import io
 import math
 import os
+import re
 import sys
 import uuid
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+
+import httpx
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
@@ -713,6 +718,172 @@ def creer_session_portail(authorization: str | None = Header(default=None)):
     if not url:
         raise HTTPException(status_code=500, detail="Portail de gestion indisponible.")
     return {"url": url}
+
+MESSAGE_LIEN_PRIVE = "Le lien n'est pas accessible en lecture publique."
+MESSAGE_FORMAT = "Format invalide. Le fichier doit être un CSV ou un classeur Excel (.xlsx)."
+_ID_FEUILLE = re.compile(r"/spreadsheets(?:/u/\d+)?/d/([a-zA-Z0-9-_]+)")
+
+def hote_office(hote: str) -> bool:
+    nom = (hote or "").lower().rstrip(".")
+    if nom in {"onedrive.live.com", "1drv.ms", "sharepoint.com"}:
+        return True
+    return nom.endswith(".sharepoint.com") or nom.endswith(".onedrive.live.com") or nom.endswith(".office.com") or nom.endswith(".office365.com")
+
+def hote_telechargement_autorise(hote: str) -> bool:
+    nom = (hote or "").lower().rstrip(".")
+    if nom == "docs.google.com" or nom == "googleusercontent.com" or nom.endswith(".googleusercontent.com"):
+        return True
+    return hote_office(nom)
+
+def verifier_url_https(url: str) -> None:
+    analyse = urlparse(url)
+    if analyse.scheme != "https" or analyse.username or analyse.password or analyse.port not in (None, 443):
+        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+    if not hote_telechargement_autorise(analyse.hostname or ""):
+        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+
+def url_import_publique(url: str) -> str:
+    texte = (url or "").strip()
+    if not texte:
+        raise HTTPException(status_code=400, detail="Fournissez un fichier ou une URL.")
+    verifier_url_https(texte)
+    if "docs.google.com/spreadsheets" in texte:
+        trouve = _ID_FEUILLE.search(texte)
+        if not trouve:
+            raise HTTPException(status_code=400, detail="Lien Google Sheets invalide.")
+        return f"https://docs.google.com/spreadsheets/d/{trouve.group(1)}/export?format=csv"
+    if not hote_office(urlparse(texte).hostname or ""):
+        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+    parties = urlparse(texte)
+    query = dict(parse_qsl(parties.query, keep_blank_values=True))
+    query["download"] = "1"
+    return urlunparse(parties._replace(query=urlencode(query)))
+
+def telecharger_tableur(url: str) -> tuple[bytes, str]:
+    actuelle = url
+    try:
+        with httpx.Client(timeout=httpx.Timeout(20.0), follow_redirects=False) as client:
+            for _ in range(5):
+                verifier_url_https(actuelle)
+                reponse = client.get(actuelle, headers={"Accept": "text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, */*"})
+                if reponse.status_code in {301, 302, 303, 307, 308}:
+                    cible = reponse.headers.get("location")
+                    if not cible:
+                        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+                    actuelle = urljoin(actuelle, cible)
+                    continue
+                break
+            else:
+                raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+    except HTTPException:
+        raise
+    except httpx.HTTPError:
+        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+    if reponse.status_code in {401, 403, 404} or reponse.status_code >= 400:
+        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+    contenu = reponse.content
+    if not contenu or len(contenu) > MAX_CORPS_OCTETS:
+        raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 Mo max).")
+    type_contenu = reponse.headers.get("content-type", "")
+    if "text/html" in type_contenu.lower() or contenu.lstrip()[:1] == b"<":
+        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+    return contenu, type_contenu
+
+def valeur_json(valeur: Any) -> Any:
+    if valeur is None:
+        return None
+    if isinstance(valeur, (pd.Timestamp, datetime)):
+        if pd.isna(valeur):
+            return None
+        return valeur.strftime("%Y-%m-%d")
+    if isinstance(valeur, np.integer):
+        return int(valeur)
+    if isinstance(valeur, (float, np.floating)):
+        nombre = float(valeur)
+        if not math.isfinite(nombre):
+            return None
+        return nombre
+    if isinstance(valeur, np.bool_):
+        return bool(valeur)
+    return valeur
+
+def lire_tableau(contenu: bytes, nom: str, type_contenu: str) -> pd.DataFrame:
+    nom_bas = (nom or "").lower()
+    type_bas = (type_contenu or "").lower()
+    est_csv = nom_bas.endswith(".csv") or "text/csv" in type_bas or type_bas.startswith("text/plain")
+    est_classeur = not est_csv and (nom_bas.endswith((".xlsx", ".xlsm", ".xls")) or "spreadsheet" in type_bas or "excel" in type_bas or contenu[:2] == b"PK")
+    if est_classeur:
+        return pd.read_excel(io.BytesIO(contenu), engine="openpyxl")
+    cadre = pd.read_csv(io.BytesIO(contenu), sep=None, engine="python", encoding="utf-8-sig")
+    if cadre.shape[1] == 1:
+        entete = contenu.decode("utf-8-sig", errors="replace").splitlines()[0] if contenu else ""
+        if ";" in entete:
+            cadre = pd.read_csv(io.BytesIO(contenu), sep=";", encoding="utf-8-sig")
+        elif "\t" in entete:
+            cadre = pd.read_csv(io.BytesIO(contenu), sep="\t", encoding="utf-8-sig")
+    return cadre
+
+def lignes_depuis_octets(contenu: bytes, nom: str, type_contenu: str) -> list[dict]:
+    try:
+        cadre = lire_tableau(contenu, nom, type_contenu)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail=MESSAGE_FORMAT)
+    cadre = cadre.dropna(how="all")
+    if cadre.empty or len(cadre.columns) == 0:
+        raise HTTPException(status_code=400, detail=MESSAGE_FORMAT)
+    if len(cadre) > MAX_LIGNES_HISTORIQUE:
+        raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 000 lignes max)")
+    cadre.columns = [str(colonne).strip() for colonne in cadre.columns]
+    lignes = []
+    for brut in cadre.to_dict(orient="records"):
+        lignes.append({cle: valeur_json(valeur) for cle, valeur in brut.items()})
+    if not lignes:
+        raise HTTPException(status_code=400, detail=MESSAGE_FORMAT)
+    return lignes
+
+@app.post("/import")
+async def importer_source(request: Request, authorization: str | None = Header(default=None)):
+    identite_depuis_authorization(authorization)
+    type_requete = request.headers.get("content-type", "")
+    url = ""
+    contenu = b""
+    nom = ""
+    type_fichier = ""
+    if "application/json" in type_requete:
+        try:
+            corps = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Fournissez un fichier ou une URL.")
+        if not isinstance(corps, dict):
+            raise HTTPException(status_code=400, detail="Fournissez un fichier ou une URL.")
+        url = str(corps.get("url") or "").strip()
+    else:
+        try:
+            formulaire = await request.form()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Fournissez un fichier ou une URL.")
+        url = str(formulaire.get("url") or "").strip()
+        televerse = formulaire.get("fichier")
+        if televerse is None:
+            televerse = formulaire.get("file")
+        if televerse is not None and hasattr(televerse, "read"):
+            nom = str(getattr(televerse, "filename", "") or "")
+            type_fichier = str(getattr(televerse, "content_type", "") or "")
+            contenu = await televerse.read()
+    if url and contenu:
+        raise HTTPException(status_code=400, detail="Fournissez un fichier ou une URL, pas les deux.")
+    if not url and not contenu:
+        raise HTTPException(status_code=400, detail="Fournissez un fichier ou une URL.")
+    if url:
+        cible = url_import_publique(url)
+        contenu, type_fichier = telecharger_tableur(cible)
+        nom = "import.csv" if "format=csv" in cible else "import.xlsx"
+    elif len(contenu) > MAX_CORPS_OCTETS:
+        raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 Mo max).")
+    lignes = lignes_depuis_octets(contenu, nom, type_fichier)
+    return {"lignes": lignes, "nombre": len(lignes)}
 
 @app.post("/prevision_plan")
 def generer_plan_production(requete: PrevisionRequest, authorization: str | None = Header(default=None)):
