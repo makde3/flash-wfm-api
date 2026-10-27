@@ -857,7 +857,7 @@ export default function FlashWFM() {
   const [tempsCible, setTempsCible] = useState('20');
   const [shrinkage, setShrinkage] = useState('25');
   const [backlog, setBacklog] = useState('0');
-  const [delaiSlaJours, setDelaiSlaJours] = useState('1');
+  const [delaiTraitementHeures, setDelaiTraitementHeures] = useState('24');
   const [tauxOccupation, setTauxOccupation] = useState('85');
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<Horizon>('court_terme');
@@ -910,7 +910,7 @@ export default function FlashWFM() {
     setTempsCible('20');
     setShrinkage('25');
     setBacklog('0');
-    setDelaiSlaJours('1');
+    setDelaiTraitementHeures('24');
     setTauxOccupation('85');
     setSelectedModel(null);
     setHorizon('court_terme');
@@ -941,7 +941,7 @@ export default function FlashWFM() {
     setTempsCible(cache.tempsCible);
     setShrinkage(cache.shrinkage);
     setBacklog(cache.backlog);
-    setDelaiSlaJours(cache.delaiSlaJours);
+    setDelaiTraitementHeures(cache.delaiTraitementHeures);
     setTauxOccupation(cache.tauxOccupation);
     setSelectedModel(cache.selectedModel);
     setHorizon(cache.horizon);
@@ -1074,7 +1074,8 @@ export default function FlashWFM() {
       tempsCible,
       shrinkage,
       backlog,
-      delaiSlaJours,
+      delaiSlaJours: String(delaiJoursDepuisHeures(delaiTraitementHeures)),
+      delaiTraitementHeures,
       tauxOccupation,
       selectedModel,
       horizon,
@@ -1082,7 +1083,7 @@ export default function FlashWFM() {
       etpMoyens,
       etpMoyensAppliques,
     });
-  }, [cachePret, userId, currentStep, etapeMax, fileName, dataPreview, etpFileName, etpPlanning, etpStatut, typeFlux, heuresOuverture, aht, sla, tempsCible, shrinkage, backlog, delaiSlaJours, tauxOccupation, selectedModel, horizon, plans, etpMoyens, etpMoyensAppliques]);
+  }, [cachePret, userId, currentStep, etapeMax, fileName, dataPreview, etpFileName, etpPlanning, etpStatut, typeFlux, heuresOuverture, aht, sla, tempsCible, shrinkage, backlog, delaiTraitementHeures, tauxOccupation, selectedModel, horizon, plans, etpMoyens, etpMoyensAppliques]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -1337,14 +1338,6 @@ export default function FlashWFM() {
   };
 
   const passerEtp = () => {
-    if (etpMoyens.trim()) {
-      const lu = nombre(etpMoyens);
-      if (lu == null || lu < 0) {
-        alert("Indiquez un nombre d'ETP moyens par jour.");
-        return;
-      }
-      setEtpMoyensAppliques(lu);
-    }
     setEtpFileName(null);
     setEtpBrouillon(null);
     setEtpPlanning(null);
@@ -1425,7 +1418,7 @@ export default function FlashWFM() {
           heures_ouverture: parseFloat(heuresOuverture) || 8,
           type_flux: typeFlux,
           backlog: parseInt(backlog, 10) || 0,
-          delai_sla_jours: parseInt(delaiSlaJours, 10) || 1,
+          delai_sla_jours: delaiJoursDepuisHeures(delaiTraitementHeures),
           taux_occupation: parseInt(tauxOccupation, 10) || 85,
         },
       }, 60000, token);
@@ -1470,7 +1463,7 @@ export default function FlashWFM() {
       modele: selectedModel ?? '',
       horizonLabel: horizon === 'court_terme' ? 'Court terme' : 'Long terme',
       typeFlux,
-      delaiSlaJours: parseInt(delaiSlaJours, 10) || 1,
+      delaiSlaJours: delaiJoursDepuisHeures(delaiTraitementHeures),
       tauxOccupation: parseInt(tauxOccupation, 10) || 85,
       couvertures,
     });
@@ -1580,7 +1573,6 @@ export default function FlashWFM() {
                 <Text style={[styles.panelTitle, styles.panelTitleInline]}>Étape 2 : Planning ETP réels</Text>
                 <Text style={styles.proBadge}>Pro</Text>
               </View>
-              <Text style={styles.lead}>Optionnel. Importez les ETP réellement présents pour calculer l’écart et la couverture, jour par jour.</Text>
               <ZoneImport mode={sourceEtp} onMode={setSourceEtp} url={urlEtp} onUrl={setUrlEtp} onValider={importerEtpLien} enCours={lienEnCours === 'etp'}>
                 <TouchableOpacity style={[styles.dropZone, !isPro && styles.modelBtnLocked]} onPress={pickEtp}>
                   <Ionicons name="document-attach-outline" size={28} color="#0F2D46" />
@@ -1588,14 +1580,9 @@ export default function FlashWFM() {
                   <Text style={styles.hint}>Colonne 1 = date, colonne 2 = ETP. Les dates sont rapprochées du plan : jour par jour en court terme, moyenne du mois en long terme.</Text>
                 </TouchableOpacity>
               </ZoneImport>
-              {!etpFileName ? (
-                <View style={styles.encartInfo}>
-                  <Text style={styles.encartInfoTexte}>💡 Import de planning optionnel : Si vous n'avez pas votre planning heure par heure, renseignez simplement votre ETP moyen ci-dessous. L'outil appliquera cet effectif présent pour calculer instantanément vos sur-effectifs et sous-effectifs.</Text>
-                  <View style={styles.etpMoyenChamp}>
-                    <ChampParam label="ETP moyen" info="Effectif présent sur le plateau : Nombre moyen de conseillers en ligne ou prêts à prendre des flux (FTE)." value={etpMoyens} onChangeText={saisirEtpMoyen} />
-                  </View>
-                </View>
-              ) : null}
+              <View style={styles.encartInfo}>
+                <Text style={styles.encartInfoTexte}>💡 Import de planning optionnel : Si vous n'avez pas de planning heure par heure, cliquez sur "Passer cette étape". Vous pourrez ajuster votre ETP moyen directement sur le plan de production.</Text>
+              </View>
               {etpFileName && (etpBrouillon?.length || etpPlanning?.length) ? (
                 <View style={styles.successBox}>
                   <Text style={styles.successText} numberOfLines={2}>{etpStatut === 'valide' ? 'Planning validé' : 'Fichier prêt à valider'} : {etpFileName}</Text>
@@ -1603,9 +1590,11 @@ export default function FlashWFM() {
                 </View>
               ) : null}
               <View style={styles.actionRow}>
-                <TouchableOpacity style={[styles.nextBtn, styles.actionBtn, (!isPro || !etpBrouillon?.length) && styles.generateBtnDisabled]} onPress={validerEtp}>
-                  <Text style={styles.nextBtnText}>Valider</Text>
-                </TouchableOpacity>
+                {etpBrouillon?.length ? (
+                  <TouchableOpacity style={[styles.nextBtn, styles.actionBtn, !isPro && styles.generateBtnDisabled]} onPress={validerEtp}>
+                    <Text style={styles.nextBtnText}>Valider</Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity style={[styles.secondaryBtn, styles.actionBtn]} onPress={passerEtp}>
                   <Text style={styles.secondaryBtnText}>Passer cette étape</Text>
                 </TouchableOpacity>
@@ -1627,23 +1616,27 @@ export default function FlashWFM() {
                 </TouchableOpacity>
               </View>
               <View nativeID="tour-leviers" style={tourIndex === 2 ? styles.tourCible : undefined}>
-              <View style={styles.bandeauFlux}>
-                <Text style={styles.bandeauFluxTexte}>⚡ Appels & Tchats (Flux chaud) : Calcul du besoin en temps réel pour garantir le décroché.</Text>
-                <Text style={styles.bandeauFluxTexte}>📬 Mails & Tickets (Flux froid) : Les flux étant différés, le besoin calculé ici représente un plafond maximal.</Text>
-              </View>
+              <Text style={styles.fluxMessage}>
+                {typeFlux === 'chaud'
+                  ? '⚡ Flux chaud : Calcul Erlang C basé sur votre objectif de décroché en temps réel.'
+                  : '📬 Flux froid : Calcul de charge linéaire lissé selon votre délai de traitement cible.'}
+              </Text>
               <View style={[styles.paramGrid, styles.paramGridLigne, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12 } as never) : null]}>
-                <ChampParam dense label="DMT" info="Durée Moyenne de Traitement : Temps de communication + temps de gestion post-appel (ACW)." value={aht} onChangeText={changerParam(setAht)} />
-                <ChampParam
-                  dense
-                  label="SLA"
-                  info={typeFlux === 'froid' ? 'Délai cible pour les mails et tickets, en jours ouvrés. Le besoin calculé reste un plafond maximal.' : 'Objectif de qualité : Pourcentage de flux à traiter dans le délai cible (ex : 80 % des appels pris en 20s).'}
-                  value={typeFlux === 'froid' ? delaiSlaJours : sla}
-                  onChangeText={changerParam(typeFlux === 'froid' ? setDelaiSlaJours : setSla)}
-                />
-                <ChampParam dense label="Backlog" info="Tickets déjà en attente au démarrage. Utilisé pour le flux froid." value={backlog} onChangeText={changerParam(setBacklog)} />
-                <ChampParam dense label="Occupation" info="Charge maximale ciblée : 85 % signifie que 15 % du temps reste disponible pour éviter la surchauffe des équipes." value={tauxOccupation} onChangeText={changerParam(setTauxOccupation)} />
-                <ChampParam dense label="Shrinkage" info="Temps hors-production : Pauses, réunions, formations, absentéisme (ex : 20 à 25 %)." value={shrinkage} onChangeText={changerParam(setShrinkage)} />
-                <ChampParam dense label="Amplitude" info="Heures d'ouverture du service par jour." value={heuresOuverture} onChangeText={changerParam(setHeuresOuverture)} />
+                <ChampParam dense label="DMT (s)" info="Durée Moyenne de Traitement : Temps de communication + temps de gestion post-appel (ACW)." value={aht} onChangeText={changerParam(setAht)} />
+                {typeFlux === 'chaud' ? (
+                  <>
+                    <ChampParam dense label="SLA (%)" info="Objectif de qualité : Pourcentage de flux à traiter dans le délai cible (ex : 80 % des appels pris en 20s)." value={sla} onChangeText={changerParam(setSla)} />
+                    <ChampParam dense label="Délai cible (s)" info="Temps d'attente max souhaité avant décroché (ex : 20s)." value={tempsCible} onChangeText={changerParam(setTempsCible)} />
+                  </>
+                ) : (
+                  <ChampParam dense label="Délai de traitement cible (h ou jours)" info="Délai max visé pour répondre au client (ex : 24h ou 48h)." value={delaiTraitementHeures} onChangeText={changerParam(setDelaiTraitementHeures)} />
+                )}
+                {typeFlux === 'froid' ? (
+                  <ChampParam dense label="Backlog" info="Stock initial de tickets ou mails à résorber." value={backlog} onChangeText={changerParam(setBacklog)} />
+                ) : null}
+                <ChampParam dense label="Taux d'occupation (%)" info="Charge maximale ciblée : 85 % signifie que 15 % du temps reste disponible pour éviter la surchauffe des équipes." value={tauxOccupation} onChangeText={changerParam(setTauxOccupation)} />
+                <ChampParam dense label="Shrinkage (%)" info="Temps hors-production : Pauses, réunions, formations, absentéisme (ex : 20 à 25 %)." value={shrinkage} onChangeText={changerParam(setShrinkage)} />
+                <ChampParam dense label="Amplitude (h)" info="Heures d'ouverture du service par jour." value={heuresOuverture} onChangeText={changerParam(setHeuresOuverture)} />
               </View>
               </View>
             </View>
@@ -1782,6 +1775,12 @@ export default function FlashWFM() {
   );
 }
 
+function delaiJoursDepuisHeures(heures: string) {
+  const valeur = parseFloat(heures);
+  if (!Number.isFinite(valeur) || valeur <= 0) return 1;
+  return Math.max(1, Math.round(valeur / 24));
+}
+
 function moyenne(valeurs: number[]) {
   if (!valeurs.length) return null;
   return valeurs.reduce((somme, valeur) => somme + valeur, 0) / valeurs.length;
@@ -1888,9 +1887,7 @@ const styles = StyleSheet.create({
   tourSuivantTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '800' },
   encartInfo: { marginTop: 12, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, padding: 14, gap: 12 },
   encartInfoTexte: { color: '#0F2D46', fontSize: 14, lineHeight: 21 },
-  etpMoyenChamp: { maxWidth: 280, width: '100%' },
-  bandeauFlux: { backgroundColor: '#0F2D46', borderRadius: 12, padding: 14, gap: 8, marginBottom: 4 },
-  bandeauFluxTexte: { color: '#FFFFFF', fontSize: 14, lineHeight: 20 },
+  fluxMessage: { color: '#0F2D46', fontSize: 14, lineHeight: 20, marginTop: 4, marginBottom: 4 },
   paramFieldDense: { flexBasis: 0, minWidth: 0, flexGrow: 1, flexShrink: 1, alignSelf: 'stretch' },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5, minHeight: 24 },
   labelInline: { color: '#0F2D46', fontWeight: 'bold' },

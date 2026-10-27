@@ -35,7 +35,7 @@ const CSS_DRIVER = `
 
 export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: string }[] = [
   { id: 'tour-source', etape: 1, titre: 'Source de données', texte: 'Local ou lien Web (Google Sheets, Office 365).' },
-  { id: 'tour-etp', etape: 2, titre: 'Effectif terrain', texte: 'Planning importé, ou ETP moyen si le détail manque.' },
+  { id: 'tour-etp', etape: 2, titre: 'Effectif terrain', texte: 'Importez le planning, ou passez : l’ETP moyen se règle sur le plan.' },
   { id: 'tour-leviers', etape: 3, titre: 'Cadence & Qualité', texte: 'Leviers de staffing Erlang C.' },
   { id: 'tour-bilan', etape: 4, titre: 'Bilan des écarts & Export', texte: 'Lisez les écarts, puis exportez le plan.' },
 ];

@@ -40,6 +40,7 @@ export type CacheWizard = {
   shrinkage: string;
   backlog: string;
   delaiSlaJours: string;
+  delaiTraitementHeures: string;
   tauxOccupation: string;
   selectedModel: string | null;
   horizon: Horizon;
@@ -316,6 +317,10 @@ function assainirCache(brut: unknown): CacheWizard | null {
     shrinkage: texte(source.shrinkage, '25'),
     backlog: texte(source.backlog, '0'),
     delaiSlaJours: texte(source.delaiSlaJours, '1'),
+    delaiTraitementHeures: texte(
+      source.delaiTraitementHeures,
+      String((parseInt(texte(source.delaiSlaJours, '1'), 10) || 1) * 24),
+    ),
     tauxOccupation: texte(source.tauxOccupation, '85'),
     selectedModel: typeof source.selectedModel === 'string' ? source.selectedModel : null,
     horizon: source.horizon === 'long_terme' ? 'long_terme' : 'court_terme',
