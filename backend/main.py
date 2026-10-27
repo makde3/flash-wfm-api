@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import uuid
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 import httpx
 import pandas as pd
@@ -722,8 +722,10 @@ def creer_session_portail(authorization: str | None = Header(default=None)):
     return {"url": url}
 
 MESSAGE_LIEN_PRIVE = "Le lien n'est pas accessible en lecture publique."
+MESSAGE_DOCUMENT_PRIVE = "Le document n'est pas accessible en lecture publique."
 MESSAGE_FORMAT = "Format invalide. Le fichier doit être un CSV ou un classeur Excel (.xlsx)."
-_ID_FEUILLE = re.compile(r"/spreadsheets(?:/u/\d+)?/d/([a-zA-Z0-9-_]+)")
+_ID_CLASSIQUE = re.compile(r"/spreadsheets(?:/u/\d+)?/d/([^/]+)")
+_ID_PUBLIE = re.compile(r"(/spreadsheets(?:/u/\d+)?/d/e/[^/]+)", re.IGNORECASE)
 
 def hote_office(hote: str) -> bool:
     nom = (hote or "").lower().rstrip(".")
@@ -744,51 +746,80 @@ def verifier_url_https(url: str) -> None:
     if not hote_telechargement_autorise(analyse.hostname or ""):
         raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
 
+def lien_google_publie(url: str) -> bool:
+    chemin = urlparse(url).path
+    return "/d/e/" in chemin or "/pub" in chemin
+
+def sortie_deja_precisee(url: str) -> bool:
+    return re.search(r"(?:^|&)output=", urlparse(url).query, re.IGNORECASE) is not None
+
+def normaliser_google_publie(url: str) -> str:
+    if sortie_deja_precisee(url):
+        return url
+    parties = urlparse(url)
+    trouve = _ID_PUBLIE.search(parties.path)
+    if trouve:
+        base = parties.path[: trouve.end()].rstrip("/")
+    else:
+        base = re.split(r"/pub", parties.path, maxsplit=1, flags=re.IGNORECASE)[0].rstrip("/")
+    return urlunparse((parties.scheme, parties.netloc, f"{base}/pub", "", "output=csv", ""))
+
+def normaliser_google_classique(url: str) -> str:
+    trouve = _ID_CLASSIQUE.search(urlparse(url).path)
+    if not trouve:
+        raise HTTPException(status_code=400, detail="Lien Google Sheets invalide.")
+    sheet_id = unquote(trouve.group(1)).strip()
+    if not sheet_id or "/" in sheet_id:
+        raise HTTPException(status_code=400, detail="Lien Google Sheets invalide.")
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+
+def forcer_telechargement_office(url: str) -> str:
+    parties = urlparse(url)
+    paires = [(cle, valeur) for cle, valeur in parse_qsl(parties.query, keep_blank_values=True) if cle.lower() != "download"]
+    paires.append(("download", "1"))
+    return urlunparse(parties._replace(query=urlencode(paires)))
+
 def url_import_publique(url: str) -> str:
     texte = (url or "").strip()
     if not texte:
         raise HTTPException(status_code=400, detail="Fournissez un fichier ou une URL.")
     verifier_url_https(texte)
-    if "docs.google.com/spreadsheets" in texte:
-        trouve = _ID_FEUILLE.search(texte)
-        if not trouve:
-            raise HTTPException(status_code=400, detail="Lien Google Sheets invalide.")
-        return f"https://docs.google.com/spreadsheets/d/{trouve.group(1)}/export?format=csv"
-    if not hote_office(urlparse(texte).hostname or ""):
+    hote = (urlparse(texte).hostname or "").lower()
+    if hote == "docs.google.com" and "/spreadsheets" in urlparse(texte).path:
+        if lien_google_publie(texte):
+            return normaliser_google_publie(texte)
+        return normaliser_google_classique(texte)
+    if not hote_office(hote):
         raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
-    parties = urlparse(texte)
-    query = dict(parse_qsl(parties.query, keep_blank_values=True))
-    query["download"] = "1"
-    return urlunparse(parties._replace(query=urlencode(query)))
+    return forcer_telechargement_office(texte)
+
+def contenu_html(contenu: bytes, type_contenu: str) -> bool:
+    type_bas = (type_contenu or "").lower()
+    if "text/html" in type_bas or "application/xhtml" in type_bas:
+        return True
+    apercu = contenu.lstrip(b"\xef\xbb\xbf \t\r\n")
+    if apercu[:32].lower().startswith((b"<!doctype html", b"<html")):
+        return True
+    extrait = apercu[:8192].lower()
+    return b"<!doctype html" in extrait or b"<html" in extrait or b"<head" in extrait or b"<body" in extrait
 
 def telecharger_tableur(url: str) -> tuple[bytes, str]:
-    actuelle = url
+    verifier_url_https(url)
     try:
-        with httpx.Client(timeout=httpx.Timeout(20.0), follow_redirects=False) as client:
-            for _ in range(5):
-                verifier_url_https(actuelle)
-                reponse = client.get(actuelle, headers={"Accept": "text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, */*"})
-                if reponse.status_code in {301, 302, 303, 307, 308}:
-                    cible = reponse.headers.get("location")
-                    if not cible:
-                        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
-                    actuelle = urljoin(actuelle, cible)
-                    continue
-                break
-            else:
-                raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+        with httpx.Client(timeout=httpx.Timeout(20.0), follow_redirects=True, max_redirects=10) as client:
+            reponse = client.get(url, headers={"Accept": "text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, */*"})
     except HTTPException:
         raise
     except httpx.HTTPError:
         raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
-    if reponse.status_code in {401, 403, 404} or reponse.status_code >= 400:
+    if reponse.status_code >= 400:
         raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
     contenu = reponse.content
     if not contenu or len(contenu) > MAX_CORPS_OCTETS:
         raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 Mo max).")
     type_contenu = reponse.headers.get("content-type", "")
-    if "text/html" in type_contenu.lower() or contenu.lstrip()[:1] == b"<":
-        raise HTTPException(status_code=400, detail=MESSAGE_LIEN_PRIVE)
+    if contenu_html(contenu, type_contenu):
+        raise HTTPException(status_code=400, detail=MESSAGE_DOCUMENT_PRIVE)
     return contenu, type_contenu
 
 def valeur_json(valeur: Any) -> Any:
@@ -881,7 +912,7 @@ async def importer_source(request: Request, authorization: str | None = Header(d
     if url:
         cible = url_import_publique(url)
         contenu, type_fichier = telecharger_tableur(cible)
-        nom = "import.csv" if "format=csv" in cible else "import.xlsx"
+        nom = "import.csv" if ("format=csv" in cible or "output=csv" in cible) else "import.xlsx"
     elif len(contenu) > MAX_CORPS_OCTETS:
         raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 Mo max).")
     lignes = lignes_depuis_octets(contenu, nom, type_fichier)

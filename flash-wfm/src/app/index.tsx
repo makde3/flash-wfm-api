@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { LienReinitialisation } from '../lib/session';
 import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
+import { enregistrerLienSource, lireLienSource } from '../lib/sourceProfil';
 import { enregistrerResetWizard } from '../lib/wizardStore';
 import {
   couverturesDuPlan,
@@ -823,11 +824,18 @@ export default function FlashWFM() {
       return;
     }
     let ignore = false;
-    cacheDuProprietaire(userId).then((cache) => {
+    suspendrePersistance.current = true;
+    appliquerVierge();
+    setCachePret(false);
+    Promise.all([cacheDuProprietaire(userId), lireLienSource(userId)]).then(([cache, lien]) => {
       if (ignore) return;
-      suspendrePersistance.current = false;
-      if (cache) appliquerCache(cache);
+      if (cache) appliquerCache({ ...cache, currentStep: 1 });
       else appliquerVierge();
+      if (lien && /^https?:\/\//i.test(lien)) {
+        setUrlHistorique(lien);
+        setSourceHistorique('lien');
+      }
+      suspendrePersistance.current = false;
       setCachePret(true);
     });
     return () => {
@@ -1009,6 +1017,7 @@ export default function FlashWFM() {
       }
       setFileName(url);
       setDataPreview(jsonData);
+      if (userId) void enregistrerLienSource(userId, url);
       oublierPlans();
       const moyenneDmt = dmtMoyenHistorique(jsonData);
       if (moyenneDmt != null) setAht(String(moyenneDmt));
@@ -1248,6 +1257,7 @@ export default function FlashWFM() {
         alert("Importez d'abord un historique Excel.");
         return;
       }
+      if (userId && fileName && /^https?:\/\//i.test(fileName)) void enregistrerLienSource(userId, fileName);
       avancer(2);
       return;
     }

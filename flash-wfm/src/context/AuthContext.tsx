@@ -29,22 +29,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let actif = true;
-    supabase.auth.getUser().then(async ({ data }) => {
-      const user = data.user;
-      if (!user) {
-        if (actif) setUserId(null);
+    const charger = async (id: string | null, createdAt?: string) => {
+      if (!actif) return;
+      if (!id) {
+        setUserId(null);
+        setProfile(null);
+        setAbonnementActif(false);
+        setFinEssai(null);
         return;
       }
-      if (actif) setUserId(user.id);
-      const { data: abonnements } = await supabase.from('subscriptions').select('status').eq('user_id', user.id);
+      setUserId(id);
+      const { data: abonnements } = await supabase.from('subscriptions').select('status').eq('user_id', id);
       if (!actif) return;
-      const creation = user.created_at ? new Date(user.created_at).getTime() : Date.now();
+      const creation = createdAt ? new Date(createdAt).getTime() : Date.now();
       setFinEssai(creation + 3 * 24 * 60 * 60 * 1000);
       setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
       setProfile({ plan: 'pro' });
+    };
+    supabase.auth.getSession().then(({ data }) => {
+      const user = data.session?.user;
+      void charger(user?.id ?? null, user?.created_at);
+    });
+    const { data: ecoute } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!session && event !== 'SIGNED_OUT') return;
+      const user = session?.user;
+      setTimeout(() => {
+        void charger(user?.id ?? null, user?.created_at);
+      }, 0);
     });
     return () => {
       actif = false;
+      ecoute.subscription.unsubscribe();
     };
   }, []);
 
