@@ -12,6 +12,7 @@ import { supabase } from '../lib/supabase';
 import { envoyerRetour, TYPES_RETOUR, type TypeRetour } from '../lib/feedback';
 import { historiqueExemple, lignesModele } from '../lib/exempleHistorique';
 import { marquerNouveautesVues, marquerTourVu, nouveautesDejaVues, tourDejaVu } from '../lib/nouveautes';
+import { ETAPES_GUIDE, lancerTourDriver } from '../lib/tourGuide';
 import { enregistrerLienEtp, enregistrerLienSource, lireLiensProfil } from '../lib/sourceProfil';
 import { enregistrerResetWizard } from '../lib/wizardStore';
 import {
@@ -98,9 +99,11 @@ function libelleCouverture(valeur: number | null) {
 }
 
 const POINTS_NOUVEAUTES = [
-  'Accès Pro offert pour toute la durée de la bêta.',
-  'Import universel des liens Google Sheets & Office 365.',
-  'Sauvegarde automatique de vos liens d\'historique et d\'ETP par compte.',
+  { emoji: '🚀', texte: 'Test instantané : Bouton "Données d\'exemple" et modèle Excel à l\'Étape 1.' },
+  { emoji: '⚡', texte: 'Flux chaud vs Flux froid : Clarification du calcul Erlang C (Appels/Tchats vs Mails/Tickets).' },
+  { emoji: '💡', texte: 'Guide Manager : Explications simples sur l\'ETP moyen, le Hors-prod (Shrinkage) et la Charge max.' },
+  { emoji: '💾', texte: 'Persistance Supabase : Sauvegarde automatique de vos 2 liens (Historique & ETP) par compte.' },
+  { emoji: '💬', texte: 'Canal Feedback : Bouton dans le header pour remonter vos idées en 1 clic.' },
 ];
 
 function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
@@ -109,11 +112,11 @@ function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: (
       <View style={styles.voile}>
         <View style={styles.modale}>
           <Text style={styles.modaleTitre}>Quoi de neuf dans Flash WFM ?</Text>
-          <Text style={styles.modaleLead}>Les nouveautés de cette bêta :</Text>
+          <Text style={styles.modaleLead}>Ce qui change pour piloter vos effectifs :</Text>
           {POINTS_NOUVEAUTES.map((point) => (
-            <View key={point} style={styles.modalePoint}>
-              <Text style={styles.modalePuce}>•</Text>
-              <Text style={styles.modalePointTexte}>{point}</Text>
+            <View key={point.texte} style={styles.modalePoint}>
+              <Text style={styles.modalePuce}>{point.emoji}</Text>
+              <Text style={styles.modalePointTexte}>{point.texte}</Text>
             </View>
           ))}
           <TouchableOpacity style={styles.uploadBtn} onPress={onFermer}>
@@ -263,21 +266,14 @@ function ChampParam({ label, info, value, onChangeText, dense }: { label: string
   );
 }
 
-const ETAPES_TOUR = [
-  { etape: 1 as Etape, titre: 'Source des données', texte: 'Choisissez un fichier Excel local ou un lien Google Sheets / Office 365.' },
-  { etape: 2 as Etape, titre: 'ETP réels', texte: 'Comparez le besoin calculé aux effectifs réellement présents, ou passez cette étape.' },
-  { etape: 3 as Etape, titre: 'Leviers de staffing', texte: 'Réglez les paramètres Erlang C : DMT, SLA, taux d’occupation et shrinkage.' },
-  { etape: 4 as Etape, titre: 'Écarts et export', texte: 'Analysez la couverture et les écarts d’ETP, puis exportez les résultats.' },
-];
-
 function TourGuide({ index, onSuivant, onPasser }: { index: number; onSuivant: () => void; onPasser: () => void }) {
-  const etape = ETAPES_TOUR[index];
+  const etape = ETAPES_GUIDE[index];
   if (!etape) return null;
-  const dernier = index === ETAPES_TOUR.length - 1;
+  const dernier = index === ETAPES_GUIDE.length - 1;
   return (
     <View style={styles.tourDock} pointerEvents="box-none">
       <View style={styles.tourCarte}>
-        <Text style={styles.tourKicker}>Visite guidée · {index + 1}/{ETAPES_TOUR.length}</Text>
+        <Text style={styles.tourKicker}>Visite guidée · {index + 1}/{ETAPES_GUIDE.length}</Text>
         <Text style={styles.tourTitre}>{etape.titre}</Text>
         <Text style={styles.tourTexte}>{etape.texte}</Text>
         <View style={styles.tourActions}>
@@ -970,6 +966,13 @@ export default function FlashWFM() {
     void tourDejaVu().then((vu) => {
       if (vu) return;
       setCurrentStep(1);
+      if (Platform.OS === 'web') {
+        void lancerTourDriver((etape) => setCurrentStep(etape), () => {
+          setCurrentStep(1);
+          void marquerTourVu();
+        });
+        return;
+      }
       setTourIndex(0);
     });
   };
@@ -982,13 +985,13 @@ export default function FlashWFM() {
 
   const avancerTour = () => {
     if (tourIndex == null) return;
-    if (tourIndex >= ETAPES_TOUR.length - 1) {
+    if (tourIndex >= ETAPES_GUIDE.length - 1) {
       terminerTour();
       return;
     }
     const suivant = tourIndex + 1;
     setTourIndex(suivant);
-    setCurrentStep(ETAPES_TOUR[suivant].etape);
+    setCurrentStep(ETAPES_GUIDE[suivant].etape);
   };
 
   const envoyerFeedback = async () => {
@@ -1323,7 +1326,25 @@ export default function FlashWFM() {
     avancer(3);
   };
 
+  const saisirEtpMoyen = (valeur: string) => {
+    setEtpMoyens(valeur);
+    if (!valeur.trim()) {
+      setEtpMoyensAppliques(null);
+      return;
+    }
+    const lu = nombre(valeur);
+    if (lu != null && lu >= 0) setEtpMoyensAppliques(lu);
+  };
+
   const passerEtp = () => {
+    if (etpMoyens.trim()) {
+      const lu = nombre(etpMoyens);
+      if (lu == null || lu < 0) {
+        alert("Indiquez un nombre d'ETP moyens par jour.");
+        return;
+      }
+      setEtpMoyensAppliques(lu);
+    }
     setEtpFileName(null);
     setEtpBrouillon(null);
     setEtpPlanning(null);
@@ -1529,7 +1550,7 @@ export default function FlashWFM() {
             <View style={styles.card}>
               <Text style={styles.stepText}>Étape 1 : Import historique</Text>
               <Text style={styles.lead}>Historique de volumes et de DMT. Colonnes attendues : Date, file ou activité, volume. La DMT en secondes peut occuper la 4e colonne.</Text>
-              <View style={tourIndex === 0 ? styles.tourCible : undefined}>
+              <View nativeID="tour-source" style={tourIndex === 0 ? styles.tourCible : undefined}>
                 <ZoneImport mode={sourceHistorique} onMode={setSourceHistorique} url={urlHistorique} onUrl={setUrlHistorique} onValider={importerHistoriqueLien} enCours={lienEnCours === 'historique'}>
                   <TouchableOpacity style={styles.uploadBtn} onPress={pickDocument}>
                     <Text style={styles.uploadBtnText}>+ Importer un fichier Excel</Text>
@@ -1538,7 +1559,7 @@ export default function FlashWFM() {
               </View>
               <View style={styles.aideImport}>
                 <TouchableOpacity onPress={telechargerModele}>
-                  <Text style={styles.lienDiscret}>Télécharger le fichier modèle (.xlsx)</Text>
+                  <Text style={styles.lienDiscret}>Télécharger le modèle Excel (.xlsx)</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.exempleBtn} onPress={chargerExemple}>
                   <Text style={styles.exempleBtnText}>Charger des données d'exemple</Text>
@@ -1554,7 +1575,7 @@ export default function FlashWFM() {
           ) : null}
 
           {currentStep === 2 ? (
-            <View style={[styles.panel, tourIndex === 1 && styles.tourCible]}>
+            <View nativeID="tour-etp" style={[styles.panel, tourIndex === 1 && styles.tourCible]}>
               <View style={styles.titleRow}>
                 <Text style={[styles.panelTitle, styles.panelTitleInline]}>Étape 2 : Planning ETP réels</Text>
                 <Text style={styles.proBadge}>Pro</Text>
@@ -1567,6 +1588,14 @@ export default function FlashWFM() {
                   <Text style={styles.hint}>Colonne 1 = date, colonne 2 = ETP. Les dates sont rapprochées du plan : jour par jour en court terme, moyenne du mois en long terme.</Text>
                 </TouchableOpacity>
               </ZoneImport>
+              {!etpFileName ? (
+                <View style={styles.encartInfo}>
+                  <Text style={styles.encartInfoTexte}>💡 Import de planning optionnel : Si vous n'avez pas votre planning heure par heure, renseignez simplement votre ETP moyen ci-dessous. L'outil appliquera cet effectif présent pour calculer instantanément vos sur-effectifs et sous-effectifs.</Text>
+                  <View style={styles.etpMoyenChamp}>
+                    <ChampParam label="ETP moyen" info="Effectif présent sur le plateau : Nombre moyen de conseillers en ligne ou prêts à prendre des flux (FTE)." value={etpMoyens} onChangeText={saisirEtpMoyen} />
+                  </View>
+                </View>
+              ) : null}
               {etpFileName && (etpBrouillon?.length || etpPlanning?.length) ? (
                 <View style={styles.successBox}>
                   <Text style={styles.successText} numberOfLines={2}>{etpStatut === 'valide' ? 'Planning validé' : 'Fichier prêt à valider'} : {etpFileName}</Text>
@@ -1597,25 +1626,31 @@ export default function FlashWFM() {
                   <Text style={[styles.fluxDetail, typeFlux === 'froid' && styles.fluxDetailOn]}>Calculs basés sur un modèle linéaire.</Text>
                 </TouchableOpacity>
               </View>
-              <View style={[styles.paramGrid, styles.paramGridLigne, tourIndex === 2 && styles.tourCible, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12 } as never) : null]}>
-                <ChampParam dense label="DMT" info="Durée Moyenne de Traitement, en secondes." value={aht} onChangeText={changerParam(setAht)} />
+              <View nativeID="tour-leviers" style={tourIndex === 2 ? styles.tourCible : undefined}>
+              <View style={styles.bandeauFlux}>
+                <Text style={styles.bandeauFluxTexte}>⚡ Appels & Tchats (Flux chaud) : Calcul du besoin en temps réel pour garantir le décroché.</Text>
+                <Text style={styles.bandeauFluxTexte}>📬 Mails & Tickets (Flux froid) : Les flux étant différés, le besoin calculé ici représente un plafond maximal.</Text>
+              </View>
+              <View style={[styles.paramGrid, styles.paramGridLigne, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12 } as never) : null]}>
+                <ChampParam dense label="DMT" info="Durée Moyenne de Traitement : Temps de communication + temps de gestion post-appel (ACW)." value={aht} onChangeText={changerParam(setAht)} />
                 <ChampParam
                   dense
                   label="SLA"
-                  info={typeFlux === 'froid' ? 'Délai cible de traitement, en jours ouvrés.' : 'Objectif de taux de décroché, ex: 80 % en 20 s.'}
+                  info={typeFlux === 'froid' ? 'Délai cible pour les mails et tickets, en jours ouvrés. Le besoin calculé reste un plafond maximal.' : 'Objectif de qualité : Pourcentage de flux à traiter dans le délai cible (ex : 80 % des appels pris en 20s).'}
                   value={typeFlux === 'froid' ? delaiSlaJours : sla}
                   onChangeText={changerParam(typeFlux === 'froid' ? setDelaiSlaJours : setSla)}
                 />
                 <ChampParam dense label="Backlog" info="Tickets déjà en attente au démarrage. Utilisé pour le flux froid." value={backlog} onChangeText={changerParam(setBacklog)} />
-                <ChampParam dense label="Occupation" info="Taux d'occupation cible : charge max recommandée par conseiller, ex: 85 %." value={tauxOccupation} onChangeText={changerParam(setTauxOccupation)} />
-                <ChampParam dense label="Shrinkage" info="Perte d'activité : pauses, formations, absentéisme." value={shrinkage} onChangeText={changerParam(setShrinkage)} />
+                <ChampParam dense label="Occupation" info="Charge maximale ciblée : 85 % signifie que 15 % du temps reste disponible pour éviter la surchauffe des équipes." value={tauxOccupation} onChangeText={changerParam(setTauxOccupation)} />
+                <ChampParam dense label="Shrinkage" info="Temps hors-production : Pauses, réunions, formations, absentéisme (ex : 20 à 25 %)." value={shrinkage} onChangeText={changerParam(setShrinkage)} />
                 <ChampParam dense label="Amplitude" info="Heures d'ouverture du service par jour." value={heuresOuverture} onChangeText={changerParam(setHeuresOuverture)} />
+              </View>
               </View>
             </View>
           ) : null}
 
           {currentStep === 4 ? (
-            <View style={[styles.panel, tourIndex === 3 && styles.tourCible]}>
+            <View nativeID="tour-bilan" style={[styles.panel, tourIndex === 3 && styles.tourCible]}>
               <Text style={styles.panelTitle}>Étape 4 : Restitution et horizon</Text>
               <View style={styles.horizonRow}>
                 <TouchableOpacity style={[styles.horizonBtn, horizon === 'court_terme' && styles.modelBtnActive]} onPress={() => setHorizon('court_terme')}>
@@ -1701,7 +1736,7 @@ export default function FlashWFM() {
                       <Text style={styles.hint}>Sans planning importé, un effectif moyen est appliqué à chaque période du tableau.</Text>
                       <View style={styles.ajustRow}>
                         <View style={styles.ajustChamp}>
-                          <ChampParam label="ETP Moyens par jour" info="Effectif moyen présent, appliqué à chaque période après calcul." value={etpMoyens} onChangeText={setEtpMoyens} />
+                          <ChampParam label="ETP Moyens par jour" info="Effectif présent sur le plateau : Nombre moyen de conseillers en ligne ou prêts à prendre des flux (FTE)." value={etpMoyens} onChangeText={saisirEtpMoyen} />
                         </View>
                         <TouchableOpacity style={[styles.generateBtn, styles.ajustBtn]} onPress={calculerMoyens}>
                           <Text style={styles.generateBtnText}>{etpMoyensAppliques == null ? 'Calculer' : 'Rafraîchir'}</Text>
@@ -1772,7 +1807,7 @@ const styles = StyleSheet.create({
   devBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
   logoutText: { color: '#0F2D46', fontSize: 12, fontWeight: '700' },
   voile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  modale: { width: '100%', maxWidth: 480, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
+  modale: { width: '100%', maxWidth: 560, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
   modaleTitre: { fontSize: 20, fontWeight: '800', color: '#0F2D46' },
   modaleLead: { color: '#687581', fontSize: 14, lineHeight: 20 },
   modalePoint: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
@@ -1851,6 +1886,11 @@ const styles = StyleSheet.create({
   tourPasser: { color: '#94A3B8', fontSize: 13, fontWeight: '700' },
   tourSuivant: { backgroundColor: '#F4C430', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
   tourSuivantTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '800' },
+  encartInfo: { marginTop: 12, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, padding: 14, gap: 12 },
+  encartInfoTexte: { color: '#0F2D46', fontSize: 14, lineHeight: 21 },
+  etpMoyenChamp: { maxWidth: 280, width: '100%' },
+  bandeauFlux: { backgroundColor: '#0F2D46', borderRadius: 12, padding: 14, gap: 8, marginBottom: 4 },
+  bandeauFluxTexte: { color: '#FFFFFF', fontSize: 14, lineHeight: 20 },
   paramFieldDense: { flexBasis: 0, minWidth: 0, flexGrow: 1, flexShrink: 1, alignSelf: 'stretch' },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5, minHeight: 24 },
   labelInline: { color: '#0F2D46', fontWeight: 'bold' },

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const CLE_NOUVEAUTES = 'has_seen_beta_v1';
+const CLE_NOUVEAUTES = 'has_seen_beta_v2';
 const CLE_TOUR = 'has_seen_tour';
 
 async function lireMarqueur(cle: string): Promise<string | null> {
