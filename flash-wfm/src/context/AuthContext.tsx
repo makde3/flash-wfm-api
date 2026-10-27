@@ -23,7 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [abonnementActif, setAbonnementActif] = useState(false);
   const [finEssai, setFinEssai] = useState<number | null>(null);
   const toggleDevPro = () => setDevForcePro((prev) => !prev);
-  const isPro = __DEV__ && devForcePro ? true : profile?.plan === 'pro';
+  const isPro = true;
 
   useEffect(() => {
     let actif = true;
@@ -33,10 +33,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data: abonnements } = await supabase.from('subscriptions').select('status').eq('user_id', user.id);
       if (!actif) return;
       const creation = user.created_at ? new Date(user.created_at).getTime() : Date.now();
-      const pro = (abonnements ?? []).some((ligne) => ligne.status === 'active' || ligne.status === 'trialing');
       setFinEssai(creation + 3 * 24 * 60 * 60 * 1000);
       setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
-      setProfile({ plan: pro ? 'pro' : 'free' });
+      setProfile({ plan: 'pro' });
     });
     return () => {
       actif = false;

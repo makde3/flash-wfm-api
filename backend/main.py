@@ -466,6 +466,8 @@ def entrainer_lightgbm(df, dates_futur):
     return previsions, "LightGBM"
 
 def verifier_droit_modele(modele: str, profil: dict, pro_actif: bool) -> None:
+    # Contournement temporaire : modèles et essai ouverts pour toutes les sessions.
+    return
     if pro_actif:
         return
     if modele_avance(modele):

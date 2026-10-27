@@ -121,11 +121,13 @@ function HeaderLogo({
         <TouchableOpacity style={styles.resetBtn} onPress={onReinitialiser}>
           <Text style={styles.resetText}>Réinitialiser</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.logoutBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={onAbonnement} disabled={paiementEnCours}>
-          <Text style={styles.logoutText} numberOfLines={1}>
-            {paiementEnCours ? 'Connexion au serveur...' : abonnementActif ? 'Gérer mon abonnement' : 'Passer au plan Pro'}
-          </Text>
-        </TouchableOpacity>
+        {abonnementActif ? (
+          <TouchableOpacity style={[styles.logoutBtn, paiementEnCours && styles.generateBtnDisabled]} onPress={onAbonnement} disabled={paiementEnCours}>
+            <Text style={styles.logoutText} numberOfLines={1}>
+              {paiementEnCours ? 'Connexion au serveur...' : 'Gérer mon abonnement'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
         {__DEV__ && (
           <TouchableOpacity style={[styles.devBadge, isPro ? styles.devBadgePro : styles.devBadgeFree]} onPress={toggleDevPro}>
             <Text style={styles.devBadgeText}>{isPro ? 'DEV : PRO' : 'DEV : FREE'}</Text>
@@ -726,7 +728,7 @@ export default function FlashWFM() {
   const [etpMoyensAppliques, setEtpMoyensAppliques] = useState<number | null>(cache?.etpMoyensAppliques ?? null);
   const [loading, setLoading] = useState(false);
   const { isPro, abonnementActif, finEssai } = useAuth();
-  const [modalePro, setModalePro] = useState(false);
+  const [, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -1417,17 +1419,6 @@ export default function FlashWFM() {
       {toast ? (
         <View style={styles.toast}>
           <Text style={styles.toastText}>{toast}</Text>
-        </View>
-      ) : null}
-      {modalePro ? (
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Passez au plan Pro pour débloquer</Text>
-            <Text style={styles.hint}>Le planning ETP, les écarts de couverture et les modèles avancés font partie du plan Pro.</Text>
-            <TouchableOpacity style={styles.backBtn} onPress={() => setModalePro(false)}>
-              <Text style={styles.backBtnText}>Fermer</Text>
-            </TouchableOpacity>
-          </View>
         </View>
       ) : null}
     </SafeAreaView>
