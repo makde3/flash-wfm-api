@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Platform, ScrollView, TextInput, ActivityIndicator, Linking, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Platform, ScrollView, TextInput, ActivityIndicator, Linking, Modal, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as XLSX from 'xlsx';
@@ -9,6 +9,8 @@ import { useAuth } from '../context/AuthContext';
 import { LienReinitialisation } from '../lib/session';
 import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
+import { envoyerRetour, TYPES_RETOUR, type TypeRetour } from '../lib/feedback';
+import { marquerNouveautesVues, nouveautesDejaVues } from '../lib/nouveautes';
 import { enregistrerLienEtp, enregistrerLienSource, lireLiensProfil } from '../lib/sourceProfil';
 import { enregistrerResetWizard } from '../lib/wizardStore';
 import {
@@ -94,16 +96,103 @@ function libelleCouverture(valeur: number | null) {
   return '';
 }
 
+const POINTS_NOUVEAUTES = [
+  'Accès Pro offert pour toute la durée de la bêta.',
+  'Import universel des liens Google Sheets & Office 365.',
+  'Sauvegarde automatique de vos liens d\'historique et d\'ETP par compte.',
+];
+
+function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
+      <View style={styles.voile}>
+        <View style={styles.modale}>
+          <Text style={styles.modaleTitre}>Quoi de neuf dans Flash WFM ?</Text>
+          <Text style={styles.modaleLead}>Les nouveautés de cette bêta :</Text>
+          {POINTS_NOUVEAUTES.map((point) => (
+            <View key={point} style={styles.modalePoint}>
+              <Text style={styles.modalePuce}>•</Text>
+              <Text style={styles.modalePointTexte}>{point}</Text>
+            </View>
+          ))}
+          <TouchableOpacity style={styles.uploadBtn} onPress={onFermer}>
+            <Text style={styles.uploadBtnText}>C'est parti !</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ModaleFeedback({
+  visible,
+  type,
+  message,
+  envoi,
+  onType,
+  onMessage,
+  onFermer,
+  onEnvoyer,
+}: {
+  visible: boolean;
+  type: TypeRetour;
+  message: string;
+  envoi: boolean;
+  onType: (type: TypeRetour) => void;
+  onMessage: (valeur: string) => void;
+  onFermer: () => void;
+  onEnvoyer: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
+      <View style={styles.voile}>
+        <View style={styles.modale}>
+          <Text style={styles.modaleTitre}>Une idée ? / Feedback</Text>
+          <Text style={styles.modaleLead}>Dites-nous ce qui vous aiderait, ou ce qui bloque.</Text>
+          <View style={styles.puces}>
+            {TYPES_RETOUR.map((option) => {
+              const actif = option === type;
+              return (
+                <TouchableOpacity key={option} style={[styles.puce, actif && styles.puceActive]} onPress={() => onType(option)} disabled={envoi}>
+                  <Text style={[styles.puceTexte, actif && styles.puceTexteActif]}>{option}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <TextInput
+            style={styles.feedbackSaisie}
+            value={message}
+            onChangeText={onMessage}
+            placeholder="Votre retour"
+            placeholderTextColor="#94A3B8"
+            multiline
+            editable={!envoi}
+            maxLength={4000}
+          />
+          <TouchableOpacity style={[styles.uploadBtn, envoi && styles.generateBtnDisabled]} onPress={onEnvoyer} disabled={envoi}>
+            {envoi ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.uploadBtnText}>Envoyer mon retour</Text>}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.modaleFermer} onPress={onFermer} disabled={envoi}>
+            <Text style={styles.resetText}>Fermer</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function HeaderLogo({
   abonnementActif,
   paiementEnCours,
   onAbonnement,
   onReinitialiser,
+  onFeedback,
 }: {
   abonnementActif: boolean;
   paiementEnCours: boolean;
   onAbonnement: () => void;
   onReinitialiser: () => void;
+  onFeedback: () => void;
 }) {
   const { isPro, toggleDevPro } = useAuth();
   return (
@@ -121,6 +210,9 @@ function HeaderLogo({
         </View>
       </View>
       <View style={styles.headerActions}>
+        <TouchableOpacity style={styles.resetBtn} onPress={onFeedback}>
+          <Text style={styles.resetText}>Une idée ? / Feedback</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.resetBtn} onPress={onReinitialiser}>
           <Text style={styles.resetText}>Réinitialiser</Text>
         </TouchableOpacity>
@@ -734,6 +826,11 @@ export default function FlashWFM() {
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [nouveautesOuvertes, setNouveautesOuvertes] = useState(false);
+  const [feedbackOuvert, setFeedbackOuvert] = useState(false);
+  const [typeRetour, setTypeRetour] = useState<TypeRetour>(TYPES_RETOUR[0]);
+  const [messageRetour, setMessageRetour] = useState('');
+  const [envoiRetour, setEnvoiRetour] = useState(false);
   const [sourceHistorique, setSourceHistorique] = useState<SourceImport>('fichier');
   const [sourceEtp, setSourceEtp] = useState<SourceImport>('fichier');
   const [urlHistorique, setUrlHistorique] = useState('');
@@ -807,6 +904,43 @@ export default function FlashWFM() {
     setEtpMoyens(cache.etpMoyens);
     setEtpMoyensAppliques(cache.etpMoyensAppliques);
   }, []);
+
+  useEffect(() => {
+    let ignore = false;
+    nouveautesDejaVues().then((vues) => {
+      if (!ignore && !vues) setNouveautesOuvertes(true);
+    });
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  const fermerNouveautes = () => {
+    setNouveautesOuvertes(false);
+    void marquerNouveautesVues();
+  };
+
+  const envoyerFeedback = async () => {
+    const message = messageRetour.trim();
+    if (!message) {
+      alert('Décrivez votre retour avant de l’envoyer.');
+      return;
+    }
+    if (envoiRetour) return;
+    setEnvoiRetour(true);
+    try {
+      await envoyerRetour(typeRetour, message);
+      setFeedbackOuvert(false);
+      setMessageRetour('');
+      setTypeRetour(TYPES_RETOUR[0]);
+      setToast('Merci, votre retour a bien été envoyé.');
+    } catch (error) {
+      console.error(error);
+      alert('Impossible d’enregistrer votre retour. Réessayez dans un instant.');
+    } finally {
+      setEnvoiRetour(false);
+    }
+  };
 
   useEffect(() => {
     enregistrerResetWizard(() => {
@@ -1301,6 +1435,7 @@ export default function FlashWFM() {
             paiementEnCours={paiementEnCours}
             onAbonnement={abonnementActif ? gererAbonnement : passerAuPro}
             onReinitialiser={reinitialiser}
+            onFeedback={() => setFeedbackOuvert(true)}
           />
           <Stepper etape={currentStep} etapeMax={etapeMax} peutOuvrir={peutOuvrir} onAller={setCurrentStep} />
           {messagePaiement ? (
@@ -1505,6 +1640,17 @@ export default function FlashWFM() {
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       ) : null}
+      <ModaleNouveautes visible={nouveautesOuvertes} onFermer={fermerNouveautes} />
+      <ModaleFeedback
+        visible={feedbackOuvert}
+        type={typeRetour}
+        message={messageRetour}
+        envoi={envoiRetour}
+        onType={setTypeRetour}
+        onMessage={setMessageRetour}
+        onFermer={() => { if (!envoiRetour) setFeedbackOuvert(false); }}
+        onEnvoyer={() => { void envoyerFeedback(); }}
+      />
     </SafeAreaView>
   );
 }
@@ -1533,6 +1679,20 @@ const styles = StyleSheet.create({
   devBadgeFree: { backgroundColor: '#A33B32' },
   devBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
   logoutText: { color: '#0F2D46', fontSize: 12, fontWeight: '700' },
+  voile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  modale: { width: '100%', maxWidth: 480, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
+  modaleTitre: { fontSize: 20, fontWeight: '800', color: '#0F2D46' },
+  modaleLead: { color: '#687581', fontSize: 14, lineHeight: 20 },
+  modalePoint: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  modalePuce: { color: '#F4C430', fontSize: 18, fontWeight: '800', lineHeight: 22 },
+  modalePointTexte: { flex: 1, color: '#0F2D46', fontSize: 15, lineHeight: 22 },
+  modaleFermer: { alignItems: 'center', paddingVertical: 4 },
+  puces: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  puce: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#FFFFFF' },
+  puceActive: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
+  puceTexte: { color: '#0F2D46', fontSize: 13, fontWeight: '700' },
+  puceTexteActif: { color: '#FFFFFF' },
+  feedbackSaisie: { minHeight: 120, backgroundColor: '#F7F6F1', borderWidth: 1, borderColor: '#E6E9EE', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#0F2D46', textAlignVertical: 'top' },
   card: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 2, elevation: 1 },
   stepText: { fontSize: 18, color: '#0F2D46', marginBottom: 8, fontWeight: 'bold' },
   lead: { color: '#687581', fontSize: 14, lineHeight: 20, marginBottom: 16 },
