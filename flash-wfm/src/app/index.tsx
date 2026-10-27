@@ -10,7 +10,8 @@ import { LienReinitialisation } from '../lib/session';
 import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
 import { envoyerRetour, TYPES_RETOUR, type TypeRetour } from '../lib/feedback';
-import { marquerNouveautesVues, nouveautesDejaVues } from '../lib/nouveautes';
+import { historiqueExemple, lignesModele } from '../lib/exempleHistorique';
+import { marquerNouveautesVues, marquerTourVu, nouveautesDejaVues, tourDejaVu } from '../lib/nouveautes';
 import { enregistrerLienEtp, enregistrerLienSource, lireLiensProfil } from '../lib/sourceProfil';
 import { enregistrerResetWizard } from '../lib/wizardStore';
 import {
@@ -237,24 +238,71 @@ function HeaderLogo({
 }
 
 function ChampParam({ label, info, value, onChangeText, dense }: { label: string; info: string; value: string; onChangeText: (texte: string) => void; dense?: boolean }) {
+  const [ouvert, setOuvert] = useState(false);
   return (
-    <View style={[styles.paramField, dense && styles.paramFieldDense]}>
+    <View style={[styles.paramField, dense && styles.paramFieldDense, ouvert && styles.paramFieldOuvert]}>
       <View style={styles.labelRow}>
         <Text style={[styles.labelInline, dense && styles.labelDense]} numberOfLines={dense ? 2 : 1}>{label}</Text>
-        <View
+        <TouchableOpacity
           accessibilityLabel={info}
-          ref={Platform.OS === 'web' ? (node) => {
-            const element = node as unknown as { setAttribute?: (nom: string, valeur: string) => void } | null;
-            element?.setAttribute?.('title', info);
-          } : undefined}
-          style={[styles.infoIcon, Platform.OS === 'web' ? ({ cursor: 'help' } as never) : null]}
+          accessibilityRole="button"
+          onPress={() => setOuvert((actuel) => !actuel)}
+          {...(Platform.OS === 'web' ? { onMouseEnter: () => setOuvert(true), onMouseLeave: () => setOuvert(false) } : {})}
+          style={styles.infoIcon}
         >
-          <Ionicons name="information-circle-outline" size={16} color="#687581" />
-        </View>
+          <Ionicons name="help-circle-outline" size={16} color="#687581" />
+        </TouchableOpacity>
       </View>
+      {ouvert ? (
+        <View style={styles.bulle}>
+          <Text style={styles.bulleTexte}>{info}</Text>
+        </View>
+      ) : null}
       <TextInput style={[styles.paramInput, dense && styles.paramInputDense]} value={value} onChangeText={onChangeText} keyboardType="numeric" />
     </View>
   );
+}
+
+const ETAPES_TOUR = [
+  { etape: 1 as Etape, titre: 'Source des données', texte: 'Choisissez un fichier Excel local ou un lien Google Sheets / Office 365.' },
+  { etape: 2 as Etape, titre: 'ETP réels', texte: 'Comparez le besoin calculé aux effectifs réellement présents, ou passez cette étape.' },
+  { etape: 3 as Etape, titre: 'Leviers de staffing', texte: 'Réglez les paramètres Erlang C : DMT, SLA, taux d’occupation et shrinkage.' },
+  { etape: 4 as Etape, titre: 'Écarts et export', texte: 'Analysez la couverture et les écarts d’ETP, puis exportez les résultats.' },
+];
+
+function TourGuide({ index, onSuivant, onPasser }: { index: number; onSuivant: () => void; onPasser: () => void }) {
+  const etape = ETAPES_TOUR[index];
+  if (!etape) return null;
+  const dernier = index === ETAPES_TOUR.length - 1;
+  return (
+    <View style={styles.tourDock} pointerEvents="box-none">
+      <View style={styles.tourCarte}>
+        <Text style={styles.tourKicker}>Visite guidée · {index + 1}/{ETAPES_TOUR.length}</Text>
+        <Text style={styles.tourTitre}>{etape.titre}</Text>
+        <Text style={styles.tourTexte}>{etape.texte}</Text>
+        <View style={styles.tourActions}>
+          <TouchableOpacity onPress={onPasser}>
+            <Text style={styles.tourPasser}>Passer</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.tourSuivant} onPress={onSuivant}>
+            <Text style={styles.tourSuivantTexte}>{dernier ? 'Terminer' : 'Suivant'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function telechargerModele() {
+  if (Platform.OS !== 'web') {
+    alert("Veuillez ouvrir l'application depuis un navigateur web pour télécharger le fichier Excel.");
+    return;
+  }
+  const feuille = XLSX.utils.aoa_to_sheet(lignesModele());
+  feuille['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
+  const classeur = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(classeur, feuille, 'Historique');
+  XLSX.writeFile(classeur, 'Flash-WFM-modele-historique.xlsx');
 }
 
 const TITRES_COMPACTS: Record<Etape, string> = { 1: 'Historique', 2: 'ETP', 3: 'Flux', 4: 'Résultat' };
@@ -827,6 +875,7 @@ export default function FlashWFM() {
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [nouveautesOuvertes, setNouveautesOuvertes] = useState(false);
+  const [tourIndex, setTourIndex] = useState<number | null>(null);
   const [feedbackOuvert, setFeedbackOuvert] = useState(false);
   const [typeRetour, setTypeRetour] = useState<TypeRetour>(TYPES_RETOUR[0]);
   const [messageRetour, setMessageRetour] = useState('');
@@ -918,6 +967,28 @@ export default function FlashWFM() {
   const fermerNouveautes = () => {
     setNouveautesOuvertes(false);
     void marquerNouveautesVues();
+    void tourDejaVu().then((vu) => {
+      if (vu) return;
+      setCurrentStep(1);
+      setTourIndex(0);
+    });
+  };
+
+  const terminerTour = () => {
+    setTourIndex(null);
+    setCurrentStep(1);
+    void marquerTourVu();
+  };
+
+  const avancerTour = () => {
+    if (tourIndex == null) return;
+    if (tourIndex >= ETAPES_TOUR.length - 1) {
+      terminerTour();
+      return;
+    }
+    const suivant = tourIndex + 1;
+    setTourIndex(suivant);
+    setCurrentStep(ETAPES_TOUR[suivant].etape);
   };
 
   const envoyerFeedback = async () => {
@@ -1033,6 +1104,16 @@ export default function FlashWFM() {
   }, [toast]);
 
   const oublierPlans = () => setPlans(plansVides());
+
+  const chargerExemple = () => {
+    const lignes = historiqueExemple();
+    setFileName('Données d\'exemple');
+    setDataPreview(lignes);
+    oublierPlans();
+    const moyenneDmt = dmtMoyenHistorique(lignes);
+    if (moyenneDmt != null) setAht(String(moyenneDmt));
+    setToast('3 semaines d\'historique d\'exemple sont chargées.');
+  };
 
   const avancer = (etape: Etape) => {
     setCurrentStep(etape);
@@ -1448,11 +1529,21 @@ export default function FlashWFM() {
             <View style={styles.card}>
               <Text style={styles.stepText}>Étape 1 : Import historique</Text>
               <Text style={styles.lead}>Historique de volumes et de DMT. Colonnes attendues : Date, file ou activité, volume. La DMT en secondes peut occuper la 4e colonne.</Text>
-              <ZoneImport mode={sourceHistorique} onMode={setSourceHistorique} url={urlHistorique} onUrl={setUrlHistorique} onValider={importerHistoriqueLien} enCours={lienEnCours === 'historique'}>
-                <TouchableOpacity style={styles.uploadBtn} onPress={pickDocument}>
-                  <Text style={styles.uploadBtnText}>+ Importer un fichier Excel</Text>
+              <View style={tourIndex === 0 ? styles.tourCible : undefined}>
+                <ZoneImport mode={sourceHistorique} onMode={setSourceHistorique} url={urlHistorique} onUrl={setUrlHistorique} onValider={importerHistoriqueLien} enCours={lienEnCours === 'historique'}>
+                  <TouchableOpacity style={styles.uploadBtn} onPress={pickDocument}>
+                    <Text style={styles.uploadBtnText}>+ Importer un fichier Excel</Text>
+                  </TouchableOpacity>
+                </ZoneImport>
+              </View>
+              <View style={styles.aideImport}>
+                <TouchableOpacity onPress={telechargerModele}>
+                  <Text style={styles.lienDiscret}>Télécharger le fichier modèle (.xlsx)</Text>
                 </TouchableOpacity>
-              </ZoneImport>
+                <TouchableOpacity style={styles.exempleBtn} onPress={chargerExemple}>
+                  <Text style={styles.exempleBtnText}>Charger des données d'exemple</Text>
+                </TouchableOpacity>
+              </View>
               {fileName && dataPreview ? (
                 <View style={styles.successBox}>
                   <Text style={styles.successText} numberOfLines={2}>{fileName.startsWith('http') ? 'Lien importé' : 'Fichier sélectionné'} : {fileName}</Text>
@@ -1463,7 +1554,7 @@ export default function FlashWFM() {
           ) : null}
 
           {currentStep === 2 ? (
-            <View style={styles.panel}>
+            <View style={[styles.panel, tourIndex === 1 && styles.tourCible]}>
               <View style={styles.titleRow}>
                 <Text style={[styles.panelTitle, styles.panelTitleInline]}>Étape 2 : Planning ETP réels</Text>
                 <Text style={styles.proBadge}>Pro</Text>
@@ -1506,25 +1597,25 @@ export default function FlashWFM() {
                   <Text style={[styles.fluxDetail, typeFlux === 'froid' && styles.fluxDetailOn]}>Calculs basés sur un modèle linéaire.</Text>
                 </TouchableOpacity>
               </View>
-              <View style={[styles.paramGrid, styles.paramGridLigne, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12 } as never) : null]}>
-                <ChampParam dense label="DMT" info="Durée moyenne de traitement en secondes." value={aht} onChangeText={changerParam(setAht)} />
+              <View style={[styles.paramGrid, styles.paramGridLigne, tourIndex === 2 && styles.tourCible, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12 } as never) : null]}>
+                <ChampParam dense label="DMT" info="Durée Moyenne de Traitement, en secondes." value={aht} onChangeText={changerParam(setAht)} />
                 <ChampParam
                   dense
                   label="SLA"
-                  info={typeFlux === 'froid' ? 'Délai cible en jours ouvrés.' : 'Part des demandes traitées dans le délai cible, en %.'}
+                  info={typeFlux === 'froid' ? 'Délai cible de traitement, en jours ouvrés.' : 'Objectif de taux de décroché, ex: 80 % en 20 s.'}
                   value={typeFlux === 'froid' ? delaiSlaJours : sla}
                   onChangeText={changerParam(typeFlux === 'froid' ? setDelaiSlaJours : setSla)}
                 />
                 <ChampParam dense label="Backlog" info="Tickets déjà en attente au démarrage. Utilisé pour le flux froid." value={backlog} onChangeText={changerParam(setBacklog)} />
-                <ChampParam dense label="Occupation" info="Taux d'occupation cible des agents, en %. Utilisé pour le flux froid." value={tauxOccupation} onChangeText={changerParam(setTauxOccupation)} />
-                <ChampParam dense label="Shrinkage" info="Pauses, formations, congés et absentéisme, en %." value={shrinkage} onChangeText={changerParam(setShrinkage)} />
+                <ChampParam dense label="Occupation" info="Taux d'occupation cible : charge max recommandée par conseiller, ex: 85 %." value={tauxOccupation} onChangeText={changerParam(setTauxOccupation)} />
+                <ChampParam dense label="Shrinkage" info="Perte d'activité : pauses, formations, absentéisme." value={shrinkage} onChangeText={changerParam(setShrinkage)} />
                 <ChampParam dense label="Amplitude" info="Heures d'ouverture du service par jour." value={heuresOuverture} onChangeText={changerParam(setHeuresOuverture)} />
               </View>
             </View>
           ) : null}
 
           {currentStep === 4 ? (
-            <View style={styles.panel}>
+            <View style={[styles.panel, tourIndex === 3 && styles.tourCible]}>
               <Text style={styles.panelTitle}>Étape 4 : Restitution et horizon</Text>
               <View style={styles.horizonRow}>
                 <TouchableOpacity style={[styles.horizonBtn, horizon === 'court_terme' && styles.modelBtnActive]} onPress={() => setHorizon('court_terme')}>
@@ -1640,6 +1731,7 @@ export default function FlashWFM() {
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       ) : null}
+      {tourIndex != null ? <TourGuide index={tourIndex} onSuivant={avancerTour} onPasser={terminerTour} /> : null}
       <ModaleNouveautes visible={nouveautesOuvertes} onFermer={fermerNouveautes} />
       <ModaleFeedback
         visible={feedbackOuvert}
@@ -1741,7 +1833,24 @@ const styles = StyleSheet.create({
   exportBtnText: { color: '#0F2D46', fontWeight: 'bold', fontSize: 14 },
   paramGrid: { flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'flex-start', gap: 12, width: '100%', marginTop: 16 },
   paramGridLigne: { flexWrap: 'nowrap' },
-  paramField: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 },
+  paramField: { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, position: 'relative' },
+  paramFieldOuvert: { zIndex: 5 },
+  bulle: { position: 'absolute', top: 26, left: 0, width: 220, zIndex: 6, backgroundColor: '#0F2D46', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  bulleTexte: { color: '#FFFFFF', fontSize: 12, lineHeight: 16 },
+  aideImport: { marginTop: 14, gap: 10, alignItems: 'flex-start' },
+  lienDiscret: { color: '#94A3B8', fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' },
+  exempleBtn: { borderWidth: 1, borderColor: '#0F2D46', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14 },
+  exempleBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '700' },
+  tourCible: { borderWidth: 2, borderColor: '#F4C430', borderRadius: 16, padding: 8 },
+  tourDock: { position: 'absolute', left: 16, right: 16, bottom: 108, alignItems: 'center', zIndex: 40 },
+  tourCarte: { width: '100%', maxWidth: 440, backgroundColor: '#0F2D46', borderRadius: 14, padding: 16, gap: 8 },
+  tourKicker: { color: '#F4C430', fontSize: 12, fontWeight: '800' },
+  tourTitre: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+  tourTexte: { color: '#E2E8F0', fontSize: 14, lineHeight: 20 },
+  tourActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 4 },
+  tourPasser: { color: '#94A3B8', fontSize: 13, fontWeight: '700' },
+  tourSuivant: { backgroundColor: '#F4C430', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 14 },
+  tourSuivantTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '800' },
   paramFieldDense: { flexBasis: 0, minWidth: 0, flexGrow: 1, flexShrink: 1, alignSelf: 'stretch' },
   labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5, minHeight: 24 },
   labelInline: { color: '#0F2D46', fontWeight: 'bold' },
