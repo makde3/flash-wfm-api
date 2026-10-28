@@ -1,5 +1,6 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import SelecteurSkill from './SelecteurSkill';
 import { exporterSyntheseExcel, exporterSynthesePptx, type DossierSynthese, type ModeleSynthese } from '../lib/exportSynthese';
 import { couverturesDuPlan, type EtpJour, type PlanLigne, type TypeFlux } from '../lib/wizard';
 
@@ -38,6 +39,10 @@ type Props = {
   heuresOuverture: string;
   etpDispo: number | null;
   planning: EtpJour[] | null;
+  perimetre: string;
+  skills: string[];
+  skillActif: string;
+  onSkill: (skill: string) => void;
   holt: ResultatModele | null;
   light: ResultatModele | null;
 };
@@ -150,6 +155,10 @@ export default function SyntheseExecutive({
   heuresOuverture,
   etpDispo,
   planning,
+  perimetre,
+  skills,
+  skillActif,
+  onSkill,
   holt,
   light,
 }: Props) {
@@ -161,6 +170,7 @@ export default function SyntheseExecutive({
   const retenu = indicateurs.find((modele) => modele.id === recommande) ?? null;
   const delai = typeFlux === 'chaud' ? `${sla || '80'} % · ${tempsCible || '20'} s` : `${delaiTraitementHeures || '24'} h`;
   const cadre = [
+    { label: 'Périmètre', valeur: perimetre },
     { label: 'Type de flux', valeur: typeFlux === 'chaud' ? 'Chaud' : 'Froid' },
     { label: 'DMT', valeur: `${aht || '—'} s` },
     { label: 'SLA / Délai cible', valeur: delai },
@@ -178,6 +188,7 @@ export default function SyntheseExecutive({
   } : null);
   const dossier = (): DossierSynthese => ({
     hypotheses: [
+      { label: 'Périmètre', valeur: perimetre },
       { label: 'Type de flux', valeur: typeFlux === 'chaud' ? 'Chaud' : 'Froid' },
       { label: 'DMT (s)', valeur: mesure(aht), format: '#,##0' },
       { label: 'SLA / Délai cible', valeur: delai },
@@ -229,6 +240,7 @@ export default function SyntheseExecutive({
             </View>
           ) : (
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContenu}>
+              <SelecteurSkill skills={skills} actif={skillActif} onChoisir={onSkill} />
               {erreur ? <Text style={styles.erreur}>{erreur}</Text> : null}
               <View style={styles.bloc}>
                 <Text style={styles.blocTitre}>Rappel du cadre</Text>

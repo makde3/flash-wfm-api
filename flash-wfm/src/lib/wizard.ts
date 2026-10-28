@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { CibleSkill } from './skills';
 
 export type Horizon = 'court_terme' | 'long_terme';
 export type TypeFlux = 'chaud' | 'froid';
@@ -45,6 +46,9 @@ export type CacheWizard = {
   selectedModel: string | null;
   horizon: Horizon;
   plans: Record<Horizon, PlanLigne[] | null>;
+  plansParSkill: Record<Horizon, Record<string, PlanLigne[]> | null>;
+  ciblesSkills: Record<string, CibleSkill>;
+  skillActif: string;
   etpMoyens: string;
   etpMoyensAppliques: number | null;
 };
@@ -153,7 +157,7 @@ export function normaliserJour(valeur: unknown): string | null {
 export function historiqueExploitable(lignes: unknown[]): lignes is Record<string, unknown>[] {
   return lignes.length > 0 && lignes.every((row) => {
     if (row == null || typeof row !== 'object' || Array.isArray(row)) return false;
-    return Object.keys(row).length >= 3;
+    return Object.keys(row).length >= 2;
   });
 }
 
@@ -299,6 +303,7 @@ function assainirCache(brut: unknown): CacheWizard | null {
   const appliques = typeof source.etpMoyensAppliques === 'number' && Number.isFinite(source.etpMoyensAppliques) && source.etpMoyensAppliques >= 0
     ? source.etpMoyensAppliques
     : null;
+  const plansParSkill = lirePlansParSkill(source.plansParSkill);
   return {
     version: 1,
     userId: typeof source.userId === 'string' ? source.userId : '',
@@ -325,7 +330,50 @@ function assainirCache(brut: unknown): CacheWizard | null {
     selectedModel: typeof source.selectedModel === 'string' ? source.selectedModel : null,
     horizon: source.horizon === 'long_terme' ? 'long_terme' : 'court_terme',
     plans,
+    plansParSkill,
+    ciblesSkills: lireCibles(source.ciblesSkills),
+    skillActif: typeof source.skillActif === 'string' && source.skillActif.trim() ? source.skillActif : 'globale',
     etpMoyens: texte(source.etpMoyens, ''),
     etpMoyensAppliques: appliques,
   };
+}
+
+function lireCibles(valeur: unknown): Record<string, CibleSkill> {
+  if (valeur == null || typeof valeur !== 'object') return {};
+  const sortie: Record<string, CibleSkill> = {};
+  for (const [cle, item] of Object.entries(valeur)) {
+    if (item == null || typeof item !== 'object') continue;
+    const row = item as Partial<CibleSkill>;
+    if (typeof row.dmt !== 'string' && typeof row.sla !== 'string' && typeof row.etp !== 'string') continue;
+    const lire = (champ: keyof CibleSkill, defaut: string) => (typeof row[champ] === 'string' ? row[champ] : defaut);
+    const amplitude = lire('amplitude', '8');
+    const shrinkage = lire('shrinkage', '25');
+    sortie[cle] = {
+      etp: lire('etp', ''),
+      dmt: lire('dmt', '360'),
+      sla: lire('sla', '80'),
+      delaiCible: lire('delaiCible', '20'),
+      shrinkage,
+      occupation: lire('occupation', '85'),
+      amplitude,
+      delaiTraitement: lire('delaiTraitement', '24'),
+      backlog: lire('backlog', '0'),
+      heuresTravaillees: lire('heuresTravaillees', String(Math.round((parseFloat(amplitude) || 8) * (1 - (parseFloat(shrinkage) || 0) / 100) * 10) / 10)),
+    };
+  }
+  return sortie;
+}
+
+function lirePlansParSkill(valeur: unknown): Record<Horizon, Record<string, PlanLigne[]> | null> {
+  const source = valeur != null && typeof valeur === 'object' ? valeur as Partial<Record<Horizon, Record<string, PlanLigne[]>>> : {};
+  const lire = (horizon: Horizon) => {
+    const paquet = source[horizon];
+    if (paquet == null || typeof paquet !== 'object') return null;
+    const sortie: Record<string, PlanLigne[]> = {};
+    for (const [skill, plan] of Object.entries(paquet)) {
+      if (estPlan(plan)) sortie[skill] = plan;
+    }
+    return Object.keys(sortie).length ? sortie : null;
+  };
+  return { court_terme: lire('court_terme'), long_terme: lire('long_terme') };
 }

@@ -114,6 +114,19 @@ class ErlangRequest(BaseModel):
     backlog: int = 0
     delai_sla_jours: int = 1
     taux_occupation: int = 85
+    heures_travaillees: float | None = None
+
+class SkillConfigPayload(BaseModel):
+    dmt: float | None = None
+    sla: float | None = None
+    delai_cible: float | None = None
+    shrinkage: float | None = None
+    occupation: float | None = None
+    amplitude: float | None = None
+    delai_traitement: float | None = None
+    backlog: float | None = None
+    heures_travaillees: float | None = None
+    etp: float | None = None
 
 class PrevisionRequest(BaseModel):
     modele: str
@@ -121,6 +134,8 @@ class PrevisionRequest(BaseModel):
     donnees: List[Dict[str, Any]]
     parametres_erlang: ErlangRequest
     evaluer_wape: bool = False
+    skill: str | None = None
+    skill_configs: Dict[str, SkillConfigPayload] | None = None
 
 def calcul_erlang_c(agents, traffic):
     if agents <= traffic:
@@ -152,11 +167,14 @@ def calculer_etp_ticketing(volume, req: ErlangRequest, inclure_backlog: bool = F
     backlog = req.backlog if inclure_backlog else 0
     charge_heures = (volume + backlog) * aht_heures
 
-    capacite_agent_jour = (
-        req.heures_ouverture
-        * (1.0 - (req.shrinkage / 100.0))
-        * (req.taux_occupation / 100.0)
-    )
+    if req.heures_travaillees is not None and req.heures_travaillees > 0:
+        capacite_agent_jour = req.heures_travaillees * (req.taux_occupation / 100.0)
+    else:
+        capacite_agent_jour = (
+            req.heures_ouverture
+            * (1.0 - (req.shrinkage / 100.0))
+            * (req.taux_occupation / 100.0)
+        )
     if capacite_agent_jour <= 0:
         return 1
 
@@ -998,8 +1016,38 @@ async def importer_source(request: Request, authorization: str | None = Header(d
     lignes = lignes_depuis_octets(contenu, nom, type_fichier)
     return {"lignes": lignes, "nombre": len(lignes)}
 
+def erlang_depuis_config(requete: PrevisionRequest) -> ErlangRequest:
+    configs = requete.skill_configs or {}
+    nom = (requete.skill or "").strip()
+    cfg = configs.get(nom) if nom else None
+    if cfg is None and len(configs) == 1:
+        cfg = next(iter(configs.values()))
+    if cfg is None:
+        return requete.parametres_erlang
+    data = requete.parametres_erlang.model_dump()
+    if cfg.dmt is not None:
+        data["aht"] = max(1, int(round(cfg.dmt)))
+    if cfg.sla is not None:
+        data["sla_cible"] = int(round(cfg.sla))
+    if cfg.delai_cible is not None:
+        data["temps_cible"] = max(1, int(round(cfg.delai_cible)))
+    if cfg.shrinkage is not None:
+        data["shrinkage"] = int(round(cfg.shrinkage))
+    if cfg.occupation is not None:
+        data["taux_occupation"] = int(round(cfg.occupation))
+    if cfg.amplitude is not None:
+        data["heures_ouverture"] = float(cfg.amplitude)
+    if cfg.backlog is not None:
+        data["backlog"] = max(0, int(round(cfg.backlog)))
+    if cfg.delai_traitement is not None and cfg.delai_traitement > 0:
+        data["delai_sla_jours"] = max(1, int(round(cfg.delai_traitement / 24.0)))
+    if cfg.heures_travaillees is not None:
+        data["heures_travaillees"] = float(cfg.heures_travaillees)
+    return ErlangRequest(**data)
+
 @app.post("/prevision_plan")
 def generer_plan_production(requete: PrevisionRequest, authorization: str | None = Header(default=None)):
+    requete = requete.model_copy(update={"parametres_erlang": erlang_depuis_config(requete)})
     if len(requete.donnees) > MAX_LIGNES_HISTORIQUE:
         raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 000 lignes max)")
     user_id = identite_depuis_authorization(authorization)

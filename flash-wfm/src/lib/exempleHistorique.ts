@@ -4,7 +4,9 @@ export function lignesModele(): (string | number)[][] {
   return [
     [...ENTETE_MODELE],
     ['06/10/2026', 'Accueil', 128, 360],
+    ['06/10/2026', 'Support', 42, 480],
     ['07/10/2026', 'Accueil', 116, 340],
+    ['07/10/2026', 'Support', 38, 450],
   ];
 }
 
@@ -21,12 +23,9 @@ export function historiqueExemple(aujourdHui = new Date()): Record<string, strin
     const dmt = 300 + ((index * 17) % 90);
     const jour = String(date.getDate()).padStart(2, '0');
     const mois = String(date.getMonth() + 1).padStart(2, '0');
-    lignes.push({
-      Date: `${jour}/${mois}/${date.getFullYear()}`,
-      File: 'Accueil',
-      Volume: volume,
-      DMT: dmt,
-    });
+    const dateTexte = `${jour}/${mois}/${date.getFullYear()}`;
+    lignes.push({ Date: dateTexte, File: 'Accueil', Volume: volume, DMT: dmt });
+    lignes.push({ Date: dateTexte, File: 'Support', Volume: Math.max(8, Math.round(volume * 0.42)), DMT: dmt + 80 });
   }
   return lignes;
 }

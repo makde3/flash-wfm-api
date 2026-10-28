@@ -5,6 +5,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as XLSX from 'xlsx';
 import * as XLSXStyle from 'xlsx-js-style';
 import CombinedChart from '../components/CombinedChart';
+import SelecteurSkill from '../components/SelecteurSkill';
 import SyntheseExecutive, { type ResultatModele } from '../components/SyntheseExecutive';
 import { useAuth } from '../context/AuthContext';
 import { LienReinitialisation } from '../lib/session';
@@ -12,15 +13,28 @@ import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
 import { envoyerRetour, TYPES_RETOUR, type TypeRetour } from '../lib/feedback';
 import { historiqueExemple, lignesModele } from '../lib/exempleHistorique';
+import {
+  SKILL_DEFAUT,
+  VUE_GLOBALE,
+  analyserHistorique,
+  configSkill,
+  consoliderPlans,
+  dmtPondere,
+  heuresTravailleesParDefaut,
+  libellePerimetre,
+  moyennePonderee,
+  payloadSkillConfigs,
+  vueDesPlans,
+  type SerieSkill,
+  type SkillConfig,
+} from '../lib/skills';
 import { marquerNouveautesVues, marquerTourVu, nouveautesDejaVues, tourDejaVu } from '../lib/nouveautes';
 import { ETAPES_GUIDE, lancerTourDriver } from '../lib/tourGuide';
 import { enregistrerLienEtp, enregistrerLienSource, lireLiensProfil } from '../lib/sourceProfil';
 import { enregistrerResetWizard } from '../lib/wizardStore';
 import {
   couverturesDuPlan,
-  dmtMoyenHistorique,
   ecrireCache,
-  historiqueExploitable,
   cacheDuProprietaire,
   nombre,
   parserPlanningEtp,
@@ -36,6 +50,8 @@ import {
   type TypeFlux,
 } from '../lib/wizard';
 
+const MESSAGE_HISTORIQUE = 'Format invalide. Colonnes attendues : Date et Volume. Une colonne Skill, File ou Activité est optionnelle. La DMT peut occuper une colonne dédiée.';
+
 const API_BASE = __DEV__ && Platform.OS === 'web'
   ? 'http://127.0.0.1:8000'
   : Platform.OS === 'android'
@@ -48,8 +64,83 @@ const ETAPES: { id: Etape; titre: string }[] = [
   { id: 4, titre: 'Restitution' },
 ];
 
+type PlansSkills = Record<Horizon, Record<string, PlanLigne[]> | null>;
+type PaquetModele = Record<string, ResultatModele>;
+
 function plansVides(): Record<Horizon, PlanLigne[] | null> {
   return { court_terme: null, long_terme: null };
+}
+
+function plansSkillsVides(): PlansSkills {
+  return { court_terme: null, long_terme: null };
+}
+
+const MODES_PREVISION: { id: 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride'; titre: string; sous?: string }[] = [
+  { id: 'Auto', titre: 'Auto (Recommandé)' },
+  { id: 'LightGBM', titre: 'IA & Machine Learning' },
+  { id: 'Holt-Winters', titre: 'Saisonnalité & Tendances' },
+  { id: 'Hybride', titre: 'Modèle Hybride (Consensus)', sous: 'Fusion des modèles pour lisser les pics et réduire les risques.' },
+];
+
+function libelleModele(modele: string | null) {
+  return MODES_PREVISION.find((mode) => mode.id === modele)?.titre ?? '';
+}
+
+function modeleConnu(modele: string | null): modele is 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride' {
+  return MODES_PREVISION.some((mode) => mode.id === modele);
+}
+
+function retenirMeilleur(holt: ResultatModele | undefined, light: ResultatModele | undefined): PlanLigne[] {
+  if (!holt) return light?.plan ?? [];
+  if (!light) return holt.plan;
+  if (holt.wape == null && light.wape == null) return holt.plan;
+  if (holt.wape == null) return light.plan;
+  if (light.wape == null) return holt.plan;
+  return light.wape < holt.wape ? light.plan : holt.plan;
+}
+
+function poidsConsensus(wapeHolt: number | null, wapeLight: number | null) {
+  if (wapeHolt == null || wapeLight == null) return [0.5, 0.5];
+  const holt = 1 / Math.max(wapeHolt, 0.1);
+  const light = 1 / Math.max(wapeLight, 0.1);
+  const somme = holt + light;
+  return [holt / somme, light / somme];
+}
+
+function fusionnerLignes(holt: PlanLigne[], light: PlanLigne[], poidsHolt: number, poidsLight: number): PlanLigne[] {
+  const holtParDate = new Map(holt.map((ligne) => [ligne.date, ligne]));
+  const lightParDate = new Map(light.map((ligne) => [ligne.date, ligne]));
+  const ordre = [...holt.map((ligne) => ligne.date)];
+  for (const ligne of light) {
+    if (!holtParDate.has(ligne.date)) ordre.push(ligne.date);
+  }
+  return ordre.map((date) => {
+    const ligneHolt = holtParDate.get(date);
+    const ligneLight = lightParDate.get(date);
+    if (!ligneLight) return ligneHolt!;
+    if (!ligneHolt) return ligneLight;
+    return {
+      date,
+      volume_prevu: Math.max(0, Math.round(ligneHolt.volume_prevu * poidsHolt + ligneLight.volume_prevu * poidsLight)),
+      etp_moyen_requis: Math.max(0, Math.round((ligneHolt.etp_moyen_requis * poidsHolt + ligneLight.etp_moyen_requis * poidsLight) * 10) / 10),
+    };
+  });
+}
+
+function composerPlans(mode: 'Auto' | 'Hybride', holt: PaquetModele, light: PaquetModele): Record<string, PlanLigne[]> {
+  const skills = new Set([...Object.keys(holt), ...Object.keys(light)]);
+  const plans: Record<string, PlanLigne[]> = {};
+  for (const skill of skills) {
+    const serieHolt = holt[skill];
+    const serieLight = light[skill];
+    if (mode === 'Auto') {
+      plans[skill] = retenirMeilleur(serieHolt, serieLight);
+      continue;
+    }
+    const [poidsHolt, poidsLight] = poidsConsensus(serieHolt?.wape ?? null, serieLight?.wape ?? null);
+    plans[skill] = fusionnerLignes(serieHolt?.plan ?? [], serieLight?.plan ?? [], poidsHolt, poidsLight);
+  }
+  return plans;
 }
 
 function dateCourte(date: string) {
@@ -520,9 +611,10 @@ type ExportPlan = {
   delaiSlaJours: number;
   tauxOccupation: number;
   couvertures: LigneCouverture[] | null;
+  perimetre: string;
 };
 
-function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation, couvertures }: ExportPlan) {
+function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation, couvertures, perimetre }: ExportPlan) {
   const volumeTotal = plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
   const etpMoyen = plan.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / plan.length;
   const fluxFroid = typeFlux === 'froid';
@@ -531,7 +623,7 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
   const avecCouverture = !!couvertures;
   const lignes: (string | number)[][] = [
     ['Flash WFM — Plan de production'],
-    ['Mak Consult'],
+    [`Mak Consult · ${perimetre}`],
     [],
     ['Paramètre', 'Valeur'],
     ['AHT (secondes)', aht],
@@ -864,10 +956,14 @@ export default function FlashWFM() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<Horizon>('court_terme');
   const [plans, setPlans] = useState<Record<Horizon, PlanLigne[] | null>>(plansVides());
+  const [plansParSkill, setPlansParSkill] = useState<PlansSkills>(plansSkillsVides());
+  const [ciblesSkills, setCiblesSkills] = useState<Record<string, SkillConfig>>({});
+  const [skillActif, setSkillActif] = useState(VUE_GLOBALE);
+  const [remplissage, setRemplissage] = useState({ sla: '80', delai: '20', occupation: '85' });
   const [etpMoyens, setEtpMoyens] = useState('');
   const [etpMoyensAppliques, setEtpMoyensAppliques] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const { userId, isPro, abonnementActif, finEssai } = useAuth();
+  const { userId, isPro, abonnementActif } = useAuth();
   const [, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
@@ -886,28 +982,96 @@ export default function FlashWFM() {
   const [syntheseOuverte, setSyntheseOuverte] = useState(false);
   const [syntheseChargement, setSyntheseChargement] = useState(false);
   const [syntheseErreur, setSyntheseErreur] = useState<string | null>(null);
-  const [comparatif, setComparatif] = useState<{ cle: string; holt: ResultatModele | null; light: ResultatModele | null } | null>(null);
+  const [comparatif, setComparatif] = useState<{ cle: string; holt: PaquetModele | null; light: PaquetModele | null } | null>(null);
   const [cachePret, setCachePret] = useState(false);
   const suspendrePersistance = useRef(false);
-  const essaiActif = finEssai !== null && Date.now() < finEssai;
-  const moyenneDisponible = isPro || finEssai === null || essaiActif;
-  const plan = plans[horizon];
+  const series = useMemo(() => (dataPreview ? analyserHistorique(dataPreview) : []), [dataPreview]);
+  const multi = series.length > 1;
+  const skillCourant = multi && skillActif !== VUE_GLOBALE && series.some((serie) => serie.skill === skillActif) ? skillActif : VUE_GLOBALE;
+  const perimetre = series.length ? (multi ? libellePerimetre(skillCourant) : series[0].skill) : SKILL_DEFAUT;
+  const plan = useMemo(() => {
+    const paquet = plansParSkill[horizon];
+    if (paquet) {
+      if (skillCourant === VUE_GLOBALE) return consoliderPlans(Object.values(paquet));
+      return paquet[skillCourant] ?? null;
+    }
+    return plans[horizon];
+  }, [plansParSkill, plans, horizon, skillCourant]);
   const planningActif = isPro && etpStatut === 'valide' && !!etpPlanning?.length;
-  const dmtFichier = useMemo(() => (dataPreview ? dmtMoyenHistorique(dataPreview) : null), [dataPreview]);
+  const dmtFichier = useMemo(() => dmtPondere(series), [series]);
+  const etpSaisieVue = useMemo(() => {
+    const lire = (skill: string) => {
+      const lu = nombre(ciblesSkills[skill]?.etp ?? '');
+      return lu != null && lu >= 0 ? lu : null;
+    };
+    if (!multi) return etpMoyensAppliques;
+    if (skillCourant !== VUE_GLOBALE) return lire(skillCourant);
+    const valeurs = series.map((serie) => lire(serie.skill)).filter((valeur): valeur is number => valeur != null);
+    if (!valeurs.length) return etpMoyensAppliques;
+    return valeurs.reduce((somme, valeur) => somme + valeur, 0);
+  }, [multi, skillCourant, series, ciblesSkills, etpMoyensAppliques]);
+  const planningVue = planningActif && (!multi || skillCourant === VUE_GLOBALE);
   const couvertures = useMemo(() => {
     if (!plan) return null;
-    return couverturesDuPlan(plan, planningActif ? etpPlanning : null, planningActif || !isPro ? null : etpMoyensAppliques);
-  }, [plan, planningActif, etpPlanning, isPro, etpMoyensAppliques]);
-  const periodesSansEtp = !!couvertures && planningActif && couvertures.some((ligne) => ligne.etpDispo == null);
+    if (planningVue) return couverturesDuPlan(plan, etpPlanning, null);
+    if (!isPro) return null;
+    return couverturesDuPlan(plan, null, etpSaisieVue);
+  }, [plan, planningVue, etpPlanning, isPro, etpSaisieVue]);
+  const periodesSansEtp = !!couvertures && planningVue && couvertures.some((ligne) => ligne.etpDispo == null);
+  const ciblesVue = useMemo(() => {
+    const secours = {
+      dmt: aht || '360',
+      sla: sla || '80',
+      shrinkage: shrinkage || '25',
+      delaiCible: tempsCible || '20',
+      occupation: tauxOccupation || '85',
+      amplitude: heuresOuverture || '8',
+      delaiTraitement: delaiTraitementHeures || '24',
+      heuresTravaillees: heuresTravailleesParDefaut(heuresOuverture || '8', shrinkage || '25'),
+    };
+    const lireConfig = (cible: SkillConfig | undefined) => ({
+      dmt: cible?.dmt || secours.dmt,
+      sla: cible?.sla || secours.sla,
+      shrinkage: cible?.shrinkage || secours.shrinkage,
+      delaiCible: cible?.delaiCible || secours.delaiCible,
+      occupation: cible?.occupation || secours.occupation,
+      amplitude: cible?.amplitude || secours.amplitude,
+      delaiTraitement: cible?.delaiTraitement || secours.delaiTraitement,
+      heuresTravaillees: cible?.heuresTravaillees || secours.heuresTravaillees,
+    });
+    const skillCible = !multi ? (series[0]?.skill ?? SKILL_DEFAUT) : (skillCourant === VUE_GLOBALE ? null : skillCourant);
+    if (skillCible) return lireConfig(ciblesSkills[skillCible]);
+    const paquet = plansParSkill[horizon];
+    const volumes: Record<string, number> = {};
+    for (const serie of series) {
+      volumes[serie.skill] = (paquet?.[serie.skill] ?? []).reduce((somme, ligne) => somme + ligne.volume_prevu, 0) || serie.volumeTotal;
+    }
+    const lire = (champ: 'dmt' | 'sla' | 'shrinkage' | 'delaiCible' | 'occupation' | 'amplitude' | 'delaiTraitement' | 'heuresTravaillees') => {
+      const valeur = moyennePonderee(series, ciblesSkills, volumes, champ);
+      return valeur == null ? secours[champ] : String(valeur);
+    };
+    return {
+      dmt: lire('dmt'),
+      sla: lire('sla'),
+      shrinkage: lire('shrinkage'),
+      delaiCible: lire('delaiCible'),
+      occupation: lire('occupation'),
+      amplitude: lire('amplitude'),
+      delaiTraitement: lire('delaiTraitement'),
+      heuresTravaillees: lire('heuresTravaillees'),
+    };
+  }, [multi, skillCourant, ciblesSkills, aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures, series, plansParSkill, horizon]);
+  const holtVue = useMemo(() => vueDesPlans(comparatif?.holt ?? null, skillCourant), [comparatif, skillCourant]);
+  const lightVue = useMemo(() => vueDesPlans(comparatif?.light ?? null, skillCourant), [comparatif, skillCourant]);
   const etpDispoMoyen = useMemo(() => {
-    if (planningActif && couvertures) {
+    if (planningVue && couvertures) {
       const valeurs = couvertures.map((ligne) => ligne.etpDispo).filter((valeur): valeur is number => valeur != null);
       const moy = moyenne(valeurs);
       if (moy != null) return moy;
     }
-    if (!planningActif && etpMoyensAppliques != null) return etpMoyensAppliques;
+    if (!planningVue && etpSaisieVue != null) return etpSaisieVue;
     return null;
-  }, [planningActif, couvertures, etpMoyensAppliques]);
+  }, [planningVue, couvertures, etpSaisieVue]);
 
   const appliquerVierge = useCallback(() => {
     setCurrentStep(1);
@@ -930,6 +1094,9 @@ export default function FlashWFM() {
     setSelectedModel(null);
     setHorizon('court_terme');
     setPlans(plansVides());
+    setPlansParSkill(plansSkillsVides());
+    setCiblesSkills({});
+    setSkillActif(VUE_GLOBALE);
     setEtpMoyens('');
     setEtpMoyensAppliques(null);
     setSourceHistorique('fichier');
@@ -958,9 +1125,12 @@ export default function FlashWFM() {
     setBacklog(cache.backlog);
     setDelaiTraitementHeures(cache.delaiTraitementHeures);
     setTauxOccupation(cache.tauxOccupation);
-    setSelectedModel(cache.selectedModel);
+    setSelectedModel(modeleConnu(cache.selectedModel) ? cache.selectedModel : null);
     setHorizon(cache.horizon);
     setPlans(cache.plans);
+    setPlansParSkill(cache.plansParSkill);
+    setCiblesSkills(cache.ciblesSkills);
+    setSkillActif(cache.skillActif);
     setEtpMoyens(cache.etpMoyens);
     setEtpMoyensAppliques(cache.etpMoyensAppliques);
   }, []);
@@ -1095,10 +1265,13 @@ export default function FlashWFM() {
       selectedModel,
       horizon,
       plans,
+      plansParSkill,
+      ciblesSkills,
+      skillActif,
       etpMoyens,
       etpMoyensAppliques,
     });
-  }, [cachePret, userId, currentStep, etapeMax, fileName, dataPreview, etpFileName, etpPlanning, etpStatut, typeFlux, heuresOuverture, aht, sla, tempsCible, shrinkage, backlog, delaiTraitementHeures, tauxOccupation, selectedModel, horizon, plans, etpMoyens, etpMoyensAppliques]);
+  }, [cachePret, userId, currentStep, etapeMax, fileName, dataPreview, etpFileName, etpPlanning, etpStatut, typeFlux, heuresOuverture, aht, sla, tempsCible, shrinkage, backlog, delaiTraitementHeures, tauxOccupation, selectedModel, horizon, plans, plansParSkill, ciblesSkills, skillActif, etpMoyens, etpMoyensAppliques]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -1124,17 +1297,43 @@ export default function FlashWFM() {
 
   const oublierPlans = () => {
     setPlans(plansVides());
+    setPlansParSkill(plansSkillsVides());
     setComparatif(null);
   };
+
+  useEffect(() => {
+    const base = series.length ? series : [{ skill: SKILL_DEFAUT, dmtMoyen: null as number | null }];
+    setCiblesSkills((actuel) => {
+      const suivant: Record<string, SkillConfig> = {};
+      let change = Object.keys(actuel).length !== base.length;
+      for (const serie of base) {
+        const existante = actuel[serie.skill];
+        suivant[serie.skill] = existante ?? configSkill(serie.dmtMoyen, {
+          dmt: aht || '360',
+          sla: sla || '80',
+          delaiCible: tempsCible || '20',
+          shrinkage: shrinkage || '25',
+          occupation: tauxOccupation || '85',
+          amplitude: heuresOuverture || '8',
+          delaiTraitement: delaiTraitementHeures || '24',
+          backlog: base.length > 1 ? '0' : (backlog || '0'),
+        });
+        if (!existante) change = true;
+      }
+      return change ? suivant : actuel;
+    });
+  }, [series, aht, sla, tempsCible, shrinkage, tauxOccupation, heuresOuverture, delaiTraitementHeures, backlog]);
 
   const chargerExemple = () => {
     const lignes = historiqueExemple();
     setFileName('Données d\'exemple');
     setDataPreview(lignes);
+    setCiblesSkills({});
+    setSkillActif(VUE_GLOBALE);
     oublierPlans();
-    const moyenneDmt = dmtMoyenHistorique(lignes);
+    const moyenneDmt = dmtPondere(analyserHistorique(lignes));
     if (moyenneDmt != null) setAht(String(moyenneDmt));
-    setToast('3 semaines d\'historique d\'exemple sont chargées.');
+    setToast('3 semaines d\'exemple sont chargées sur les files Accueil et Support.');
   };
 
   const avancer = (etape: Etape) => {
@@ -1223,16 +1422,19 @@ export default function FlashWFM() {
     const asset = result.assets[0];
     try {
       const jsonData = await lireFeuille(asset.uri);
-      if (!historiqueExploitable(jsonData)) {
+      const reconnu = analyserHistorique(jsonData);
+      if (!reconnu.length) {
         setDataPreview(null);
         setFileName(null);
-        alert('Format invalide. Votre fichier Excel doit contenir au moins 3 colonnes : Col 1 = Date | Col 2 = File/Activité | Col 3 = Volume. La DMT peut être en colonne 4.');
+        alert(MESSAGE_HISTORIQUE);
         return;
       }
       setFileName(asset.name);
       setDataPreview(jsonData);
+      setCiblesSkills({});
+      setSkillActif(VUE_GLOBALE);
       oublierPlans();
-      const moyenneDmt = dmtMoyenHistorique(jsonData);
+      const moyenneDmt = dmtPondere(reconnu);
       if (moyenneDmt != null) setAht(String(moyenneDmt));
     } catch (error) {
       console.error(error);
@@ -1250,17 +1452,20 @@ export default function FlashWFM() {
     setLienEnCours('historique');
     try {
       const jsonData = await importerUrl(url);
-      if (!historiqueExploitable(jsonData)) {
+      const reconnu = analyserHistorique(jsonData);
+      if (!reconnu.length) {
         setDataPreview(null);
         setFileName(null);
-        alert('Format invalide. Votre fichier Excel doit contenir au moins 3 colonnes : Col 1 = Date | Col 2 = File/Activité | Col 3 = Volume. La DMT peut être en colonne 4.');
+        alert(MESSAGE_HISTORIQUE);
         return;
       }
       setFileName(url);
       setDataPreview(jsonData);
+      setCiblesSkills({});
+      setSkillActif(VUE_GLOBALE);
       if (userId) void enregistrerLienSource(userId, url);
       oublierPlans();
-      const moyenneDmt = dmtMoyenHistorique(jsonData);
+      const moyenneDmt = dmtPondere(reconnu);
       if (moyenneDmt != null) setAht(String(moyenneDmt));
     } catch (error) {
       console.error(error);
@@ -1345,6 +1550,42 @@ export default function FlashWFM() {
     avancer(3);
   };
 
+  const socleConfig = () => ({
+    dmt: aht || '360',
+    sla: sla || '80',
+    delaiCible: tempsCible || '20',
+    shrinkage: shrinkage || '25',
+    occupation: tauxOccupation || '85',
+    amplitude: heuresOuverture || '8',
+    delaiTraitement: delaiTraitementHeures || '24',
+    backlog: backlog || '0',
+  });
+
+  const majConfig = (skill: string, champ: keyof SkillConfig, valeur: string) => {
+    const serie = series.find((item) => item.skill === skill);
+    setCiblesSkills((actuel) => ({
+      ...actuel,
+      [skill]: { ...(actuel[skill] ?? configSkill(serie?.dmtMoyen ?? null, socleConfig())), [champ]: valeur },
+    }));
+    if (champ !== 'etp') oublierPlans();
+  };
+
+  const appliquerRemplissage = () => {
+    const cibles = series.length ? series.map((serie) => serie.skill) : [SKILL_DEFAUT];
+    setCiblesSkills((actuel) => {
+      const suivant = { ...actuel };
+      for (const skill of cibles) {
+        const serie = series.find((item) => item.skill === skill);
+        const cfg = suivant[skill] ?? configSkill(serie?.dmtMoyen ?? null, socleConfig());
+        suivant[skill] = typeFlux === 'chaud'
+          ? { ...cfg, sla: remplissage.sla, delaiCible: remplissage.delai, occupation: remplissage.occupation }
+          : { ...cfg, delaiTraitement: remplissage.delai, occupation: remplissage.occupation };
+      }
+      return suivant;
+    });
+    oublierPlans();
+  };
+
   const saisirEtpMoyen = (valeur: string) => {
     setEtpMoyens(valeur);
     if (!valeur.trim()) {
@@ -1382,48 +1623,98 @@ export default function FlashWFM() {
     oublierPlans();
   };
 
-  const basculerMock = (horizonDemande: Horizon) => {
-    const volumes = (dataPreview ?? [])
-      .map((row) => nombre(Object.values(row)[2]))
-      .filter((volume): volume is number => volume != null);
-    setPlans((actuel) => ({ ...actuel, [horizonDemande]: planMock(horizonDemande, volumes) }));
+  const seriesActives = (): SerieSkill[] => (series.length ? series : [{ skill: SKILL_DEFAUT, lignes: [], dmtMoyen: null, volumeTotal: 0 }]);
+
+  const poserPlans = (horizonDemande: Horizon, paquet: Record<string, PlanLigne[]>) => {
+    setPlansParSkill((actuel) => ({ ...actuel, [horizonDemande]: paquet }));
+    setPlans((actuel) => ({ ...actuel, [horizonDemande]: consoliderPlans(Object.values(paquet)) }));
+  };
+
+  const basculerMock = (horizonDemande: Horizon, mode: string) => {
+    if (mode === 'Auto' || mode === 'Hybride') {
+      const holt: PaquetModele = {};
+      const light: PaquetModele = {};
+      for (const serie of seriesActives()) {
+        const fictif = comparatifMock(horizonDemande, serie.lignes.map((ligne) => ligne.volume));
+        holt[serie.skill] = fictif.holt;
+        light[serie.skill] = fictif.light;
+      }
+      poserPlans(horizonDemande, composerPlans(mode, holt, light));
+    } else {
+      const paquet: Record<string, PlanLigne[]> = {};
+      for (const serie of seriesActives()) {
+        paquet[serie.skill] = planMock(horizonDemande, serie.lignes.map((ligne) => ligne.volume));
+      }
+      poserPlans(horizonDemande, paquet);
+    }
     setToast('API injoignable — Mode Mock Dev');
   };
 
-  const donneesHistorique = () => (dataPreview ?? []).map((row) => {
-    const values = Object.values(row ?? {});
-    return { date: values[0] ?? null, file: values[1] ?? null, volume: values[2] ?? null };
-  });
-
-  const parametresErlang = () => ({
-    volume_horaire: 0,
-    aht: parseInt(aht, 10) || 360,
-    sla_cible: parseInt(sla, 10) || 80,
-    temps_cible: parseInt(tempsCible, 10) || 20,
-    shrinkage: parseInt(shrinkage, 10) || 25,
-    heures_ouverture: parseFloat(heuresOuverture) || 8,
-    type_flux: typeFlux,
-    backlog: parseInt(backlog, 10) || 0,
-    delai_sla_jours: delaiJoursDepuisHeures(delaiTraitementHeures),
-    taux_occupation: parseInt(tauxOccupation, 10) || 85,
-  });
+  const parametresPour = (serie: SerieSkill) => {
+    const cfg = ciblesSkills[serie.skill] ?? configSkill(serie.dmtMoyen, socleConfig());
+    return {
+      volume_horaire: 0,
+      aht: parseInt(cfg.dmt, 10) || 360,
+      sla_cible: parseInt(cfg.sla, 10) || 80,
+      temps_cible: parseInt(cfg.delaiCible, 10) || 20,
+      shrinkage: parseInt(cfg.shrinkage, 10) || 25,
+      heures_ouverture: parseFloat(cfg.amplitude) || 8,
+      type_flux: typeFlux,
+      backlog: parseInt(cfg.backlog, 10) || 0,
+      delai_sla_jours: delaiJoursDepuisHeures(cfg.delaiTraitement),
+      taux_occupation: parseInt(cfg.occupation, 10) || 85,
+      heures_travaillees: nombre(cfg.heuresTravaillees),
+    };
+  };
 
   const cleComparatif = () => JSON.stringify({
     horizon,
     fichier: fileName,
-    lignes: dataPreview?.length ?? 0,
-    erlang: parametresErlang(),
+    skills: series.map((serie) => [serie.skill, serie.lignes.length, serie.volumeTotal]),
+    cibles: ciblesSkills,
+    tempsCible,
+    heuresOuverture,
+    typeFlux,
+    backlog,
+    delaiTraitementHeures,
+    tauxOccupation,
   });
+
+  const prevoirPaquet = async (modele: string, token: string, evaluer: boolean, horizonDemande: Horizon): Promise<PaquetModele> => {
+    const actif = seriesActives().filter((serie) => serie.lignes.length > 0);
+    if (!actif.length) throw new ErreurApi(400, 'Aucune série exploitable.');
+    const entrees = await Promise.all(actif.map(async (serie) => {
+      const data = await postApi('/prevision_plan', {
+        modele,
+        horizon: horizonDemande,
+        donnees: serie.lignes.map((ligne) => ({ date: ligne.date, volume: ligne.volume, file: serie.skill })),
+        parametres_erlang: parametresPour(serie),
+        skill: serie.skill,
+        skill_configs: payloadSkillConfigs(ciblesSkills),
+        evaluer_wape: evaluer,
+      }, 60000, token);
+      if (!data || data.statut !== 'succès' || !Array.isArray(data.plan)) {
+        throw new ErreurApi(400, typeof data?.message === 'string' ? data.message : 'Données invalides');
+      }
+      const resultat: ResultatModele = { plan: data.plan as PlanLigne[], wape: typeof data.wape === 'number' ? data.wape : null };
+      return [serie.skill, resultat] as const;
+    }));
+    return Object.fromEntries(entrees);
+  };
 
   const handleGenerate = async () => {
     if (loading) return;
-    const modeleChoisi = selectedModel ?? (__DEV__ ? 'Prophet' : null);
+    const modeleChoisi = modeleConnu(selectedModel) ? selectedModel : (__DEV__ ? 'Auto' : null);
     if (!modeleChoisi) {
       alert('Veuillez sélectionner un algorithme de prévision.');
       return;
     }
-    if ((modeleChoisi === 'Prophet' && !moyenneDisponible) || (modeleChoisi !== 'Prophet' && !isPro)) {
+    if (!isPro) {
       setModalePro(true);
+      return;
+    }
+    if (dataPreview && !series.length) {
+      alert(MESSAGE_HISTORIQUE);
       return;
     }
     if (!dataPreview && !__DEV__) {
@@ -1437,31 +1728,28 @@ export default function FlashWFM() {
       const token = sessionData.session?.access_token;
       if (!token) {
         if (__DEV__) {
-          basculerMock(horizonDemande);
+          basculerMock(horizonDemande, modeleChoisi);
           return;
         }
         alert('Session expirée. Veuillez vous reconnecter.');
         return;
       }
-      const donnees = donneesHistorique();
-      const modele = modeleChoisi === 'Prophet' ? 'Moyenne' : modeleChoisi === 'Holt-Winters' ? 'Holt-Winters' : 'LightGBM';
-      const data = await postApi('/prevision_plan', {
-        modele,
-        horizon: horizonDemande,
-        donnees,
-        parametres_erlang: parametresErlang(),
-      }, 60000, token);
-      if (data.statut === 'succès' && Array.isArray(data.plan)) {
-        setPlans((actuel) => ({ ...actuel, [horizonDemande]: data.plan ?? null }));
-      } else if (__DEV__) {
-        basculerMock(horizonDemande);
+      let plansSeuls: Record<string, PlanLigne[]>;
+      if (modeleChoisi === 'Auto' || modeleChoisi === 'Hybride') {
+        const [holt, light] = await Promise.all([
+          prevoirPaquet('Holt-Winters', token, true, horizonDemande),
+          prevoirPaquet('LightGBM', token, true, horizonDemande),
+        ]);
+        plansSeuls = composerPlans(modeleChoisi, holt, light);
       } else {
-        alert(`Erreur du moteur : ${data.message || 'Données invalides'}`);
+        const paquet = await prevoirPaquet(modeleChoisi, token, false, horizonDemande);
+        plansSeuls = Object.fromEntries(Object.entries(paquet).map(([skill, resultat]) => [skill, resultat.plan]));
       }
+      poserPlans(horizonDemande, plansSeuls);
     } catch (error) {
       console.error(error);
       if (__DEV__ && (echecApiSimulable(error) || error instanceof ErreurApi)) {
-        basculerMock(horizonDemande);
+        basculerMock(horizonDemande, modeleChoisi);
       } else if (error instanceof ErreurApi && (error.status === 401 || error.status === 403)) {
         alert(error.message);
       } else if (error instanceof Error && error.name === 'AbortError') {
@@ -1482,12 +1770,15 @@ export default function FlashWFM() {
     if (comparatif?.cle === cle && (comparatif.holt || comparatif.light)) return;
     setSyntheseChargement(true);
     setSyntheseErreur(null);
-    const volumes = (dataPreview ?? [])
-      .map((row) => nombre(Object.values(row)[2]))
-      .filter((volume): volume is number => volume != null);
     const poserMock = () => {
-      const fictif = comparatifMock(horizon, volumes);
-      setComparatif({ cle, ...fictif });
+      const holt: PaquetModele = {};
+      const light: PaquetModele = {};
+      for (const serie of seriesActives()) {
+        const fictif = comparatifMock(horizon, serie.lignes.map((ligne) => ligne.volume));
+        holt[serie.skill] = fictif.holt;
+        light[serie.skill] = fictif.light;
+      }
+      setComparatif({ cle, holt, light });
       setToast('API injoignable — Mode Mock Dev');
     };
     try {
@@ -1502,22 +1793,13 @@ export default function FlashWFM() {
         return;
       }
       const [holt, light] = await Promise.allSettled([
-        postApi('/prevision_plan', { modele: 'Holt-Winters', horizon, donnees: donneesHistorique(), parametres_erlang: parametresErlang(), evaluer_wape: true }, 60000, token),
-        postApi('/prevision_plan', { modele: 'LightGBM', horizon, donnees: donneesHistorique(), parametres_erlang: parametresErlang(), evaluer_wape: true }, 60000, token),
+        prevoirPaquet('Holt-Winters', token, true, horizon),
+        prevoirPaquet('LightGBM', token, true, horizon),
       ]);
-      const lire = (resultat: PromiseSettledResult<{ statut?: string; message?: string; plan?: PlanLigne[]; wape?: number | null }>) => {
-        if (resultat.status !== 'fulfilled') return null;
-        const data = resultat.value;
-        if (data.statut === 'succès' && Array.isArray(data.plan)) {
-          return { plan: data.plan, wape: typeof data.wape === 'number' ? data.wape : null };
-        }
-        return null;
-      };
-      const holtOk = lire(holt);
-      const lightOk = lire(light);
+      const holtOk = holt.status === 'fulfilled' ? holt.value : null;
+      const lightOk = light.status === 'fulfilled' ? light.value : null;
       if (!holtOk && !lightOk) {
-        const messageApi = holt.status === 'fulfilled' ? holt.value.message : light.status === 'fulfilled' ? light.value.message : '';
-        const motif = holt.status === 'rejected' ? holt.reason : light.status === 'rejected' ? light.reason : new Error(messageApi || 'Comparaison impossible.');
+        const motif = holt.status === 'rejected' ? holt.reason : light.status === 'rejected' ? light.reason : new Error('Comparaison impossible.');
         if (__DEV__ && (echecApiSimulable(motif) || motif instanceof ErreurApi)) {
           poserMock();
           return;
@@ -1548,17 +1830,18 @@ export default function FlashWFM() {
     if (!plan) return;
     exporterPlanExcel({
       plan,
-      aht: parseInt(aht, 10) || 360,
-      sla: parseInt(sla, 10) || 80,
-      tempsCible: parseInt(tempsCible, 10) || 20,
-      shrinkage: parseInt(shrinkage, 10) || 25,
-      heuresOuverture: parseFloat(heuresOuverture) || 8,
-      modele: selectedModel ?? '',
+      aht: parseInt(ciblesVue.dmt, 10) || 360,
+      sla: parseFloat(ciblesVue.sla) || 80,
+      tempsCible: parseInt(ciblesVue.delaiCible, 10) || 20,
+      shrinkage: parseFloat(ciblesVue.shrinkage) || 25,
+      heuresOuverture: parseFloat(ciblesVue.amplitude) || 8,
+      modele: libelleModele(selectedModel),
       horizonLabel: horizon === 'court_terme' ? 'Court terme' : 'Long terme',
       typeFlux,
-      delaiSlaJours: delaiJoursDepuisHeures(delaiTraitementHeures),
-      tauxOccupation: parseInt(tauxOccupation, 10) || 85,
+      delaiSlaJours: delaiJoursDepuisHeures(ciblesVue.delaiTraitement),
+      tauxOccupation: parseInt(ciblesVue.occupation, 10) || 85,
       couvertures,
+      perimetre,
     });
   };
 
@@ -1635,7 +1918,7 @@ export default function FlashWFM() {
           {currentStep === 1 ? (
             <View style={styles.card}>
               <Text style={styles.stepText}>Étape 1 : Import historique</Text>
-              <Text style={styles.lead}>Historique de volumes et de DMT. Colonnes attendues : Date, file ou activité, volume. La DMT en secondes peut occuper la 4e colonne.</Text>
+              <Text style={styles.lead}>Historique de volumes et de DMT. Colonnes attendues : Date et Volume. Une colonne Skill, File ou Activité est optionnelle : sans elle, tout l'historique est rattaché à la file Général. La DMT peut occuper une colonne dédiée.</Text>
               <View nativeID="tour-source" style={tourIndex === 0 ? styles.tourCible : undefined}>
                 <ZoneImport mode={sourceHistorique} onMode={setSourceHistorique} url={urlHistorique} onUrl={setUrlHistorique} onValider={importerHistoriqueLien} enCours={lienEnCours === 'historique'}>
                   <TouchableOpacity style={styles.uploadBtn} onPress={pickDocument}>
@@ -1654,7 +1937,13 @@ export default function FlashWFM() {
               {fileName && dataPreview ? (
                 <View style={styles.successBox}>
                   <Text style={styles.successText} numberOfLines={2}>{fileName.startsWith('http') ? 'Lien importé' : 'Fichier sélectionné'} : {fileName}</Text>
-                  <Text style={styles.hint}>{dataPreview.length.toLocaleString('fr-FR')} ligne(s){dmtFichier != null ? ` · DMT moyenne ${dmtFichier.toLocaleString('fr-FR')} s` : ' · DMT non détectée, à saisir à l’étape 3'}</Text>
+                  <Text style={styles.hint}>{dataPreview.length.toLocaleString('fr-FR')} ligne(s){series.length <= 1 ? ` · 1 file (${series[0]?.skill ?? SKILL_DEFAUT})` : ''}{dmtFichier != null ? ` · DMT moyenne ${dmtFichier.toLocaleString('fr-FR')} s` : ' · DMT non détectée, à saisir à l’étape 3'}</Text>
+                  {multi ? (
+                    <View style={styles.badgeFiles}>
+                      <Ionicons name="layers-outline" size={16} color="#0F2D46" />
+                      <Text style={styles.badgeFilesTexte}>{series.length.toLocaleString('fr-FR')} files détectées : {series.map((serie) => serie.skill).join(', ')}</Text>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
             </View>
@@ -1720,23 +2009,71 @@ export default function FlashWFM() {
                     : 'Flux froid : Calcul de charge linéaire lissé selon votre délai de traitement cible.'}
                 </Text>
               </View>
-              <View style={[styles.paramGrid, styles.paramGridLigne, Platform.OS === 'web' ? ({ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 12 } as never) : null]}>
-                <ChampParam dense label="DMT (s)" info="Durée Moyenne de Traitement : Temps de communication + temps de gestion post-appel (ACW)." value={aht} onChangeText={changerParam(setAht)} />
-                {typeFlux === 'chaud' ? (
-                  <>
-                    <ChampParam dense label="SLA (%)" info="Objectif de qualité : Pourcentage de flux à traiter dans le délai cible (ex : 80 % des appels pris en 20s)." value={sla} onChangeText={changerParam(setSla)} />
-                    <ChampParam dense label="Délai cible (s)" info="Temps d'attente max souhaité avant décroché (ex : 20s)." value={tempsCible} onChangeText={changerParam(setTempsCible)} />
-                  </>
-                ) : (
-                  <ChampParam dense label="Délai de traitement cible (h ou jours)" info="Délai max visé pour répondre au client (ex : 24h ou 48h)." value={delaiTraitementHeures} onChangeText={changerParam(setDelaiTraitementHeures)} />
-                )}
-                {typeFlux === 'froid' ? (
-                  <ChampParam dense label="Backlog" info="Stock initial de tickets ou mails à résorber." value={backlog} onChangeText={changerParam(setBacklog)} />
-                ) : null}
-                <ChampParam dense label="Taux d'occupation (%)" info="Charge maximale ciblée : 85 % signifie que 15 % du temps reste disponible pour éviter la surchauffe des équipes." value={tauxOccupation} onChangeText={changerParam(setTauxOccupation)} />
-                <ChampParam dense label="Shrinkage (%)" info="Temps hors-production : Pauses, réunions, formations, absentéisme (ex : 20 à 25 %)." value={shrinkage} onChangeText={changerParam(setShrinkage)} />
-                <ChampParam dense label="Amplitude (h)" info="Heures d'ouverture du service par jour." value={heuresOuverture} onChangeText={changerParam(setHeuresOuverture)} />
+              <View style={styles.remplissage}>
+                <Text style={styles.skillLabel}>Remplissage rapide</Text>
+                <View style={styles.remplissageLigne}>
+                  {typeFlux === 'chaud' ? (
+                    <View style={styles.remplissageChamp}>
+                      <Text style={styles.remplissageLabel}>SLA (%)</Text>
+                      <TextInput style={[styles.skillInput, styles.remplissageInput]} value={remplissage.sla} onChangeText={(slaSaisie) => setRemplissage((actuel) => ({ ...actuel, sla: slaSaisie }))} keyboardType="decimal-pad" placeholder="SLA %" placeholderTextColor="#94A3B8" />
+                    </View>
+                  ) : null}
+                  <View style={styles.remplissageChamp}>
+                    <Text style={styles.remplissageLabel}>{typeFlux === 'chaud' ? 'Délai cible (s)' : 'Délai cible (h)'}</Text>
+                    <TextInput style={[styles.skillInput, styles.remplissageInput]} value={remplissage.delai} onChangeText={(delai) => setRemplissage((actuel) => ({ ...actuel, delai }))} keyboardType="decimal-pad" placeholder={typeFlux === 'chaud' ? 'Délai (s)' : 'Délai (h)'} placeholderTextColor="#94A3B8" />
+                  </View>
+                  <View style={styles.remplissageChamp}>
+                    <Text style={styles.remplissageLabel}>Occupation (%)</Text>
+                    <TextInput style={[styles.skillInput, styles.remplissageInput]} value={remplissage.occupation} onChangeText={(occupation) => setRemplissage((actuel) => ({ ...actuel, occupation }))} keyboardType="decimal-pad" placeholder="Occupation %" placeholderTextColor="#94A3B8" />
+                  </View>
+                  <TouchableOpacity style={[styles.secondaryBtn, styles.remplissageBtn]} onPress={appliquerRemplissage}>
+                    <Text style={styles.secondaryBtnText}>Appliquer à toutes les files</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={styles.matrice}>
+                  <View style={styles.matriceLigne}>
+                    <Text style={[styles.matriceFile, styles.skillLabel]}>File</Text>
+                    {(typeFlux === 'chaud'
+                      ? [
+                          ['dmt', 'DMT cible (s)'],
+                          ['sla', 'SLA (%)'],
+                          ['delaiCible', 'Délai cible (s)'],
+                          ['shrinkage', 'Shrinkage (%)'],
+                          ['occupation', 'Occupation (%)'],
+                          ['amplitude', 'Amplitude (h)'],
+                        ]
+                      : [
+                          ['dmt', 'DMT cible (s)'],
+                          ['delaiTraitement', 'Délai (h)'],
+                          ['backlog', 'Backlog'],
+                          ['shrinkage', 'Shrinkage (%)'],
+                          ['occupation', 'Occupation (%)'],
+                          ['amplitude', 'Amplitude (h)'],
+                          ['heuresTravaillees', 'Heures / jour / ETP'],
+                        ]).map(([champ, label]) => (
+                      <Text key={champ} style={[styles.matriceCell, styles.skillLabel]}>{label}</Text>
+                    ))}
+                  </View>
+                  {(series.length ? series : [{ skill: SKILL_DEFAUT }]).map((serie) => {
+                    const cfg = ciblesSkills[serie.skill] ?? configSkill('dmtMoyen' in serie ? serie.dmtMoyen : null, socleConfig());
+                    const colonnes = typeFlux === 'chaud'
+                      ? (['dmt', 'sla', 'delaiCible', 'shrinkage', 'occupation', 'amplitude'] as const)
+                      : (['dmt', 'delaiTraitement', 'backlog', 'shrinkage', 'occupation', 'amplitude', 'heuresTravaillees'] as const);
+                    return (
+                      <View key={serie.skill} style={styles.matriceLigne}>
+                        <Text style={[styles.matriceFile, styles.matriceNom]} numberOfLines={1}>{serie.skill}</Text>
+                        {colonnes.map((champ) => (
+                          <View key={champ} style={styles.matriceCell}>
+                            <TextInput style={styles.skillInput} value={cfg[champ]} onChangeText={(valeur) => majConfig(serie.skill, champ, valeur)} keyboardType="decimal-pad" />
+                          </View>
+                        ))}
+                      </View>
+                    );
+                  })}
+                </View>
+              </ScrollView>
               </View>
             </View>
           ) : null}
@@ -1755,35 +2092,46 @@ export default function FlashWFM() {
               <Text style={styles.hint}>Court terme : 30 jours. Long terme : 12 mois. Le modèle sert à projeter les volumes avant le calcul d’ETP.</Text>
 
               <View style={styles.modelRow}>
-                <TouchableOpacity
-                  style={[styles.modelBtn, styles.modelBtnDash, !moyenneDisponible && styles.modelBtnLocked, moyenneDisponible && selectedModel === 'Prophet' && styles.modelBtnActive]}
-                  onPress={() => choisirModele('Prophet', moyenneDisponible)}
-                >
-                  <Text style={[styles.modelBtnText, moyenneDisponible && selectedModel === 'Prophet' && styles.modelBtnTextActive]}>Moyenne historique</Text>
-                  {!moyenneDisponible ? <Text style={styles.proBadge}>Pro</Text> : null}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modelBtn, styles.modelBtnDash, !isPro && styles.modelBtnLocked, isPro && selectedModel === 'Holt-Winters' && styles.modelBtnActive]}
-                  onPress={() => choisirModele('Holt-Winters', isPro)}
-                >
-                  <Text style={[styles.modelBtnText, isPro && selectedModel === 'Holt-Winters' && styles.modelBtnTextActive]}>Holt-Winters</Text>
-                  {!isPro ? <Text style={styles.proBadge}>Pro</Text> : null}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modelBtn, styles.modelBtnDash, !isPro && styles.modelBtnLocked, isPro && selectedModel === 'LightGBM' && styles.modelBtnActive]}
-                  onPress={() => choisirModele('LightGBM', isPro)}
-                >
-                  <Text style={[styles.modelBtnText, isPro && selectedModel === 'LightGBM' && styles.modelBtnTextActive]}>LightGBM</Text>
-                  {!isPro ? <Text style={styles.proBadge}>Pro</Text> : null}
-                </TouchableOpacity>
+                {MODES_PREVISION.map((mode) => {
+                  const actif = isPro && selectedModel === mode.id;
+                  return (
+                    <TouchableOpacity
+                      key={mode.id}
+                      style={[styles.modelBtn, styles.modelBtnDash, styles.modelBtnPile, !isPro && styles.modelBtnLocked, actif && styles.modelBtnActive]}
+                      onPress={() => choisirModele(mode.id, isPro)}
+                    >
+                      <View style={styles.modelBtnTitre}>
+                        <Text style={[styles.modelBtnText, actif && styles.modelBtnTextActive]}>{mode.titre}</Text>
+                        {!isPro ? <Text style={styles.proBadge}>Pro</Text> : null}
+                      </View>
+                      {mode.sous ? <Text style={[styles.modelBtnSous, actif && styles.modelBtnSousActif]}>{mode.sous}</Text> : null}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-              {!isPro && essaiActif ? (
-                <Text style={styles.hint}>Essai gratuit du modèle Moyenne : encore {Math.max(1, Math.ceil((finEssai! - Date.now()) / (24 * 60 * 60 * 1000)))} jour(s).</Text>
-              ) : null}
 
               <TouchableOpacity style={[styles.generateBtn, loading && styles.generateBtnDisabled]} onPress={handleGenerate} disabled={loading}>
                 {loading ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.generateBtnText}>{plan ? 'Recalculer le plan de production' : 'Générer le plan de production'}</Text>}
               </TouchableOpacity>
+
+              {multi ? (
+                <View style={styles.skillBloc}>
+                  <SelecteurSkill skills={series.map((serie) => serie.skill)} actif={skillCourant} onChoisir={setSkillActif} />
+                  <View style={styles.skillChamp}>
+                    <Text style={styles.skillLabel}>ETP dispo</Text>
+                    <TextInput
+                      style={[styles.skillInput, skillCourant === VUE_GLOBALE && styles.skillInputLecture]}
+                      value={skillCourant === VUE_GLOBALE ? (etpSaisieVue == null ? '' : etpSaisieVue.toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })) : (ciblesSkills[skillCourant]?.etp ?? '')}
+                      editable={skillCourant !== VUE_GLOBALE}
+                      onChangeText={(texte) => { if (skillCourant !== VUE_GLOBALE) majConfig(skillCourant, 'etp', texte); }}
+                      keyboardType="decimal-pad"
+                      placeholder={skillCourant === VUE_GLOBALE ? '—' : '0'}
+                      placeholderTextColor="#94A3B8"
+                    />
+                  </View>
+                  <Text style={styles.hint}>{skillCourant === VUE_GLOBALE ? 'Somme des ETP disponibles. Les paramètres de calcul se règlent à l’étape 3.' : 'ETP disponible de cette file. Les autres paramètres se règlent à l’étape 3.'}</Text>
+                </View>
+              ) : null}
 
               {plan ? (
                 <View style={styles.resultat}>
@@ -1821,11 +2169,12 @@ export default function FlashWFM() {
                       </TouchableOpacity>
                     </View>
                   </View>
-                  {planningActif ? <Text style={styles.hint}>Écart et couverture calculés à partir du planning ETP importé.</Text> : null}
+                  {planningVue ? <Text style={styles.hint}>Écart et couverture calculés à partir du planning ETP importé.</Text> : null}
+                  {multi && planningActif && skillCourant !== VUE_GLOBALE ? <Text style={styles.hint}>Cette file utilise l'ETP saisi ci-dessus. La vue globale conserve le planning jour par jour.</Text> : null}
                   {periodesSansEtp ? <Text style={styles.hint}>Certaines périodes du plan n’ont pas de correspondance dans le fichier ETP.</Text> : null}
                   <HorizontalPlan plan={plan} couvertures={couvertures} />
 
-                  {!planningActif ? (
+                  {!planningActif && !multi ? (
                     <View style={styles.ajustBloc}>
                       <View style={styles.titleRow}>
                         <Text style={styles.ajustTitre}>Ajuster ETP dispo</Text>
@@ -1872,17 +2221,21 @@ export default function FlashWFM() {
         erreur={syntheseErreur}
         onFermer={() => setSyntheseOuverte(false)}
         typeFlux={typeFlux}
-        aht={aht}
-        sla={sla}
-        tempsCible={tempsCible}
-        delaiTraitementHeures={delaiTraitementHeures}
-        tauxOccupation={tauxOccupation}
-        shrinkage={shrinkage}
-        heuresOuverture={heuresOuverture}
+        aht={ciblesVue.dmt}
+        sla={ciblesVue.sla}
+        tempsCible={ciblesVue.delaiCible}
+        delaiTraitementHeures={ciblesVue.delaiTraitement}
+        tauxOccupation={ciblesVue.occupation}
+        shrinkage={ciblesVue.shrinkage}
+        heuresOuverture={ciblesVue.amplitude}
         etpDispo={etpDispoMoyen}
-        planning={planningActif ? etpPlanning : null}
-        holt={comparatif?.holt ?? null}
-        light={comparatif?.light ?? null}
+        planning={planningVue ? etpPlanning : null}
+        perimetre={perimetre}
+        skills={series.map((serie) => serie.skill)}
+        skillActif={skillCourant}
+        onSkill={setSkillActif}
+        holt={holtVue}
+        light={lightVue}
       />
       <ModaleFeedback
         visible={feedbackOuvert}
@@ -1986,8 +2339,31 @@ const styles = StyleSheet.create({
   secondaryBtn: { marginTop: 16, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   secondaryBtnText: { color: '#1E293B', fontSize: 14, fontWeight: '600', textAlign: 'center' },
   actionRow: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  badgeFiles: { marginTop: 10, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 },
+  badgeFilesTexte: { color: '#1E293B', fontSize: 13, fontWeight: '600' },
+  remplissage: { marginTop: 12, gap: 8, padding: 12, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, backgroundColor: '#F8FAFC' },
+  remplissageLigne: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' },
+  remplissageChamp: { width: 120 },
+  remplissageLabel: { fontSize: 12, fontWeight: '500', color: '#64748B', marginBottom: 4 },
+  remplissageInput: { width: 120 },
+  remplissageBtn: { marginTop: 0 },
+  matrice: { marginTop: 12, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#FFFFFF' },
+  matriceLigne: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
+  matriceFile: { width: 140, paddingHorizontal: 10, paddingVertical: 8 },
+  matriceCell: { width: 128, paddingHorizontal: 8, paddingVertical: 8 },
+  matriceNom: { color: '#0F2D46', fontSize: 13, fontWeight: '600' },
+  skillBloc: { marginTop: 16, gap: 8 },
+  skillBandeau: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  skillChamp: { flexGrow: 1, flexBasis: 140, gap: 4 },
+  skillLabel: { color: '#687581', fontSize: 11, fontWeight: '500' },
+  skillInput: { height: 40, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 12, color: '#1E293B', fontSize: 14, backgroundColor: '#FFFFFF' },
+  skillInputLecture: { backgroundColor: '#F8FAFC', color: '#1E293B' },
   actionBtn: { flexGrow: 1, flexBasis: 220 },
   modelBtn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+  modelBtnPile: { flexDirection: 'column', alignItems: 'center', gap: 4 },
+  modelBtnTitre: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  modelBtnSous: { color: '#64748B', fontSize: 12, fontWeight: '500', lineHeight: 16, textAlign: 'center' },
+  modelBtnSousActif: { color: '#E2E8F0' },
   modelBtnLocked: { opacity: 0.55 },
   proBadge: { backgroundColor: '#F4C430', color: '#0F2D46', fontSize: 11, fontWeight: '600', overflow: 'hidden', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
   modalBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15, 45, 70, 0.45)', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 20 },
@@ -2044,7 +2420,7 @@ const styles = StyleSheet.create({
   infoIcon: { width: 16, height: 16, flexShrink: 0 },
   paramInput: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', height: 40, paddingHorizontal: 16, borderRadius: 8, fontSize: 14, color: '#1E293B', width: '100%' },
   paramInputDense: { paddingHorizontal: 8, marginTop: 'auto' },
-  modelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, width: '100%', marginTop: 16 },
+  modelRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', gap: 12, width: '100%', marginTop: 16 },
   modelBtnDash: { flexGrow: 1, flexShrink: 1, flexBasis: 220, minWidth: 180 },
   hTable: { width: '100%', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden' },
   hScroll: { width: '100%' },
