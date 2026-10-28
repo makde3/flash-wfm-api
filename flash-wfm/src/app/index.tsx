@@ -1817,7 +1817,7 @@ export default function FlashWFM() {
         return;
       }
       setComparatif({ cle, holt: holtOk, light: lightOk });
-      if (!holtOk || !lightOk) setSyntheseErreur('Un des deux modèles n’a pas pu être calculé. Le comparatif affiche le modèle disponible.');
+      if (!holtOk || !lightOk) setSyntheseErreur('Un des modèles sources n’a pas pu être calculé. Le comparatif affiche les modèles disponibles.');
     } catch (error) {
       console.error(error);
       if (__DEV__ && echecApiSimulable(error)) {

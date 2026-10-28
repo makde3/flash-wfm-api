@@ -1,7 +1,7 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SelecteurSkill from './SelecteurSkill';
-import { exporterSyntheseExcel, exporterSynthesePptx, type DossierSynthese, type ModeleSynthese } from '../lib/exportSynthese';
+import { exporterSyntheseExcel, exporterSynthesePptx, type DossierSynthese, type IdSynthese, type ModeleSynthese } from '../lib/exportSynthese';
 import { couverturesDuPlan, type EtpJour, type PlanLigne, type TypeFlux } from '../lib/wizard';
 
 export type ResultatModele = {
@@ -9,12 +9,9 @@ export type ResultatModele = {
   wape: number | null;
 };
 
-type IdModele = 'holt' | 'light';
-
 type Indicateur = {
-  id: IdModele;
+  id: IdSynthese;
   nom: string;
-  algo: string;
   wape: number | null;
   volume: number;
   etpMoyen: number;
@@ -22,6 +19,7 @@ type Indicateur = {
   ecart: number | null;
   picEtp: number;
   picPeriode: string;
+  vide: boolean;
 };
 
 type Props = {
@@ -60,7 +58,62 @@ function moyenne(valeurs: number[]) {
   return valeurs.reduce((somme, valeur) => somme + valeur, 0) / valeurs.length;
 }
 
-function indiquer(id: IdModele, nom: string, algo: string, resultat: ResultatModele, planning: EtpJour[] | null, etpDispo: number | null): Indicateur {
+function poidsConsensus(wapeHolt: number | null, wapeLight: number | null) {
+  if (wapeHolt == null || wapeLight == null) return [0.5, 0.5];
+  const holt = 1 / Math.max(wapeHolt, 0.1);
+  const light = 1 / Math.max(wapeLight, 0.1);
+  const somme = holt + light;
+  return [holt / somme, light / somme];
+}
+
+function retenirAuto(holt: ResultatModele | null, light: ResultatModele | null): ResultatModele | null {
+  if (!holt?.plan.length) return light?.plan.length ? light : null;
+  if (!light?.plan.length) return holt;
+  if (holt.wape == null && light.wape == null) return holt;
+  if (holt.wape == null) return light;
+  if (light.wape == null) return holt;
+  return light.wape < holt.wape ? light : holt;
+}
+
+function fusionnerPlans(holt: PlanLigne[], light: PlanLigne[], poidsHolt: number, poidsLight: number): PlanLigne[] {
+  const holtParDate = new Map(holt.map((ligne) => [ligne.date, ligne]));
+  const lightParDate = new Map(light.map((ligne) => [ligne.date, ligne]));
+  const ordre = [...holt.map((ligne) => ligne.date)];
+  for (const ligne of light) {
+    if (!holtParDate.has(ligne.date)) ordre.push(ligne.date);
+  }
+  return ordre.map((date) => {
+    const ligneHolt = holtParDate.get(date);
+    const ligneLight = lightParDate.get(date);
+    if (!ligneLight) return ligneHolt!;
+    if (!ligneHolt) return ligneLight;
+    return {
+      date,
+      volume_prevu: Math.max(0, Math.round(ligneHolt.volume_prevu * poidsHolt + ligneLight.volume_prevu * poidsLight)),
+      etp_moyen_requis: Math.max(0, Math.round((ligneHolt.etp_moyen_requis * poidsHolt + ligneLight.etp_moyen_requis * poidsLight) * 10) / 10),
+    };
+  });
+}
+
+function wapeHybride(wapeHolt: number | null, wapeLight: number | null) {
+  if (wapeHolt == null && wapeLight == null) return null;
+  if (wapeHolt == null) return wapeLight;
+  if (wapeLight == null) return wapeHolt;
+  const [poidsHolt, poidsLight] = poidsConsensus(wapeHolt, wapeLight);
+  return Math.round((wapeHolt * poidsHolt + wapeLight * poidsLight) * 10) / 10;
+}
+
+function resultatHybride(holt: ResultatModele | null, light: ResultatModele | null): ResultatModele | null {
+  if (!holt?.plan.length) return light?.plan.length ? light : null;
+  if (!light?.plan.length) return holt;
+  const [poidsHolt, poidsLight] = poidsConsensus(holt.wape, light.wape);
+  return {
+    plan: fusionnerPlans(holt.plan, light.plan, poidsHolt, poidsLight),
+    wape: wapeHybride(holt.wape, light.wape),
+  };
+}
+
+function indiquer(id: IdSynthese, nom: string, resultat: ResultatModele, planning: EtpJour[] | null, etpDispo: number | null): Indicateur {
   const volume = resultat.plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
   const etpMoyen = resultat.plan.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / resultat.plan.length;
   const couvertures = couverturesDuPlan(resultat.plan, planning, planning ? null : etpDispo);
@@ -70,7 +123,6 @@ function indiquer(id: IdModele, nom: string, algo: string, resultat: ResultatMod
   return {
     id,
     nom,
-    algo,
     wape: resultat.wape,
     volume,
     etpMoyen,
@@ -78,22 +130,23 @@ function indiquer(id: IdModele, nom: string, algo: string, resultat: ResultatMod
     ecart: moyenne(ecarts),
     picEtp: pic.etp_moyen_requis,
     picPeriode: pic.date,
+    vide: false,
   };
 }
 
-function choisirRecommande(holt: Indicateur | null, light: Indicateur | null): IdModele | null {
-  const notes = [holt, light].filter((modele): modele is Indicateur => !!modele && modele.wape != null);
+const PRIORITE: Record<IdSynthese, number> = { auto: 0, ia: 1, saison: 2, hybride: 3 };
+
+function choisirRecommande(indicateurs: Indicateur[]): IdSynthese | null {
+  const notes = indicateurs.filter((modele) => !modele.vide && modele.wape != null);
   if (notes.length) {
-    notes.sort((a, b) => (a.wape ?? 0) - (b.wape ?? 0));
+    notes.sort((a, b) => (a.wape ?? 0) - (b.wape ?? 0) || PRIORITE[a.id] - PRIORITE[b.id]);
     return notes[0].id;
   }
-  if (holt && !light) return 'holt';
-  if (light && !holt) return 'light';
-  return null;
+  return indicateurs.find((modele) => !modele.vide)?.id ?? null;
 }
 
 function phraseVerdict(modele: Indicateur) {
-  const nom = modele.id === 'light' ? 'Le modèle IA' : 'Le modèle Tendance & Saisonnalité';
+  const nom = modele.nom;
   const recommande = etpTexte(modele.etpMoyen);
   if (modele.dispo == null || modele.ecart == null) {
     return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Renseignez votre effectif disponible pour estimer l'écart.`;
@@ -162,11 +215,20 @@ export default function SyntheseExecutive({
   holt,
   light,
 }: Props) {
-  const indicateurs = [
-    holt?.plan.length ? indiquer('holt', 'Modèle Tendance & Saisonnalité', 'Holt-Winters', holt, planning, etpDispo) : null,
-    light?.plan.length ? indiquer('light', 'Modèle IA / Avancé', 'LightGBM', light, planning, etpDispo) : null,
-  ].filter((modele): modele is Indicateur => !!modele);
-  const recommande = choisirRecommande(indicateurs.find((modele) => modele.id === 'holt') ?? null, indicateurs.find((modele) => modele.id === 'light') ?? null);
+  const saison = holt?.plan.length ? holt : null;
+  const ia = light?.plan.length ? light : null;
+  const colonnes: { id: IdSynthese; nom: string; resultat: ResultatModele | null }[] = [
+    { id: 'auto', nom: 'Auto (Recommandé)', resultat: retenirAuto(saison, ia) },
+    { id: 'ia', nom: 'IA & Machine Learning', resultat: ia },
+    { id: 'saison', nom: 'Saisonnalité & Tendances', resultat: saison },
+    { id: 'hybride', nom: 'Modèle Hybride (Consensus)', resultat: resultatHybride(saison, ia) },
+  ];
+  const indicateurs = colonnes.map((colonne) => (
+    colonne.resultat?.plan.length
+      ? indiquer(colonne.id, colonne.nom, colonne.resultat, planning, etpDispo)
+      : { id: colonne.id, nom: colonne.nom, wape: null, volume: 0, etpMoyen: 0, dispo: null, ecart: null, picEtp: 0, picPeriode: '—', vide: true }
+  ));
+  const recommande = choisirRecommande(indicateurs);
   const retenu = indicateurs.find((modele) => modele.id === recommande) ?? null;
   const delai = typeFlux === 'chaud' ? `${sla || '80'} % · ${tempsCible || '20'} s` : `${delaiTraitementHeures || '24'} h`;
   const cadre = [
@@ -197,8 +259,11 @@ export default function SyntheseExecutive({
       { label: 'Amplitude (h)', valeur: mesure(heuresOuverture), format: '0.0' },
       { label: 'ETP moyen dispo', valeur: etpDispo ?? '—', format: '#,##0.0' },
     ],
-    holt: versModele(indicateurs.find((modele) => modele.id === 'holt')),
-    light: versModele(indicateurs.find((modele) => modele.id === 'light')),
+    modeles: indicateurs.map((modele) => ({
+      id: modele.id,
+      nom: modele.nom,
+      donnees: modele.vide ? null : versModele(modele),
+    })),
     recommande,
     verdict: retenu ? phraseVerdict(retenu) : 'La précision sur l’historique n’a pas pu être mesurée. Comparez les ETP requis ci-dessus avant de figer le plan.',
   });
@@ -219,11 +284,11 @@ export default function SyntheseExecutive({
               <Text style={styles.titre}>Synthèse exécutive</Text>
             </View>
             <View style={styles.actions}>
-              <TouchableOpacity style={styles.exporter} onPress={() => lancerExport(() => exporterSyntheseExcel(dossier()))} disabled={chargement || indicateurs.length === 0}>
+              <TouchableOpacity style={styles.exporter} onPress={() => lancerExport(() => exporterSyntheseExcel(dossier()))} disabled={chargement || indicateurs.every((modele) => modele.vide)}>
                 <Ionicons name="document-text-outline" size={16} color="#F4C430" />
                 <Text style={styles.exporterTexte}>Exporter en Excel (.xlsx)</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.pptx} onPress={() => lancerExport(() => exporterSynthesePptx(dossier()))} disabled={chargement || indicateurs.length === 0}>
+              <TouchableOpacity style={styles.pptx} onPress={() => lancerExport(() => exporterSynthesePptx(dossier()))} disabled={chargement || indicateurs.every((modele) => modele.vide)}>
                 <Ionicons name="easel-outline" size={16} color="#1E293B" />
                 <Text style={styles.pptxTexte}>PowerPoint (.pptx)</Text>
               </TouchableOpacity>
@@ -236,7 +301,7 @@ export default function SyntheseExecutive({
           {chargement ? (
             <View style={styles.attente}>
               <ActivityIndicator color="#0F2D46" />
-              <Text style={styles.attenteTexte}>Comparaison des deux modèles sur votre historique…</Text>
+              <Text style={styles.attenteTexte}>Comparaison des quatre modèles sur votre historique…</Text>
             </View>
           ) : (
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContenu}>
@@ -256,41 +321,42 @@ export default function SyntheseExecutive({
 
               <View style={styles.bloc}>
                 <Text style={styles.blocTitre}>Comparatif des modèles</Text>
-                {indicateurs.length === 0 ? (
+                {indicateurs.every((modele) => modele.vide) ? (
                   <Text style={styles.attenteTexte}>Aucun modèle n’a pu être calculé.</Text>
                 ) : (
-                  <View style={styles.table}>
-                    <View style={styles.ligneEntete}>
-                      <Text style={[styles.cellule, styles.celluleLabel, styles.enteteTexte]}>Indicateur</Text>
-                      {indicateurs.map((modele) => (
-                        <View key={modele.id} style={[styles.celluleModele, modele.id === recommande && styles.enteteRecommande]}>
-                          <Text style={styles.modeleNom}>{modele.nom}</Text>
-                          <Text style={styles.modeleAlgo}>{modele.algo}</Text>
-                          <Text style={styles.modeleWape}>{modele.wape == null ? 'WAPE indisponible' : `WAPE ${nombreFR(modele.wape, 1)} %`}</Text>
-                          {modele.id === recommande ? (
-                            <View style={styles.badge}>
-                              <Ionicons name="star" size={11} color="#0F2D46" />
-                              <Text style={styles.badgeTexte}>Recommandé</Text>
-                            </View>
-                          ) : null}
+                  <ScrollView horizontal showsHorizontalScrollIndicator>
+                    <View style={styles.table}>
+                      <View style={styles.ligneEntete}>
+                        <Text style={[styles.cellule, styles.celluleLabel, styles.enteteTexte]}>Indicateur</Text>
+                        {indicateurs.map((modele) => (
+                          <View key={modele.id} style={[styles.celluleModele, modele.id === recommande && styles.enteteRecommande]}>
+                            <Text style={styles.modeleNom}>{modele.nom}</Text>
+                            <Text style={styles.modeleWape}>{modele.vide || modele.wape == null ? 'WAPE indisponible' : `WAPE ${nombreFR(modele.wape, 1)} %`}</Text>
+                            {modele.id === recommande ? (
+                              <View style={styles.badge}>
+                                <Ionicons name="star" size={11} color="#0F2D46" />
+                                <Text style={styles.badgeTexte}>Recommandé</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        ))}
+                      </View>
+                      {lignes.map((ligne, index) => (
+                        <View key={ligne.label} style={[styles.ligne, index % 2 === 1 && styles.ligneAlt]}>
+                          <Text style={[styles.cellule, styles.celluleLabel]}>{ligne.label}</Text>
+                          {indicateurs.map((modele) => {
+                            const texte = modele.vide ? '—' : ligne.valeur(modele);
+                            const couleur = !modele.vide && ligne.ecart && modele.ecart != null ? (modele.ecart < -0.05 ? '#A33B32' : modele.ecart > 0.05 ? '#1F7A4D' : '#0F2D46') : '#0F2D46';
+                            return (
+                              <Text key={modele.id} style={[styles.cellule, styles.celluleValeur, modele.id === recommande && styles.colonneRecommandee, { color: couleur }]}>
+                                {texte}
+                              </Text>
+                            );
+                          })}
                         </View>
                       ))}
                     </View>
-                    {lignes.map((ligne, index) => (
-                      <View key={ligne.label} style={[styles.ligne, index % 2 === 1 && styles.ligneAlt]}>
-                        <Text style={[styles.cellule, styles.celluleLabel]}>{ligne.label}</Text>
-                        {indicateurs.map((modele) => {
-                          const texte = ligne.valeur(modele);
-                          const couleur = ligne.ecart && modele.ecart != null ? (modele.ecart < -0.05 ? '#A33B32' : modele.ecart > 0.05 ? '#1F7A4D' : '#0F2D46') : '#0F2D46';
-                          return (
-                            <Text key={modele.id} style={[styles.cellule, styles.celluleValeur, modele.id === recommande && styles.colonneRecommandee, { color: couleur }]}>
-                              {texte}
-                            </Text>
-                          );
-                        })}
-                      </View>
-                    ))}
-                  </View>
+                  </ScrollView>
                 )}
                 <Text style={styles.note}>Le badge retient le plus faible WAPE mesuré sur la fin de l’historique.</Text>
               </View>
@@ -311,7 +377,7 @@ export default function SyntheseExecutive({
 
 const styles = StyleSheet.create({
   voile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', justifyContent: 'center', padding: 16 },
-  feuille: { width: '100%', maxWidth: 1080, alignSelf: 'center', maxHeight: '94%', backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', padding: 20, gap: 12, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  feuille: { width: '100%', maxWidth: 1240, alignSelf: 'center', maxHeight: '94%', backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', padding: 20, gap: 12, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   entete: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
   enteteTitres: { flexShrink: 1, gap: 2 },
   kicker: { color: '#687581', fontSize: 12, fontWeight: '500', letterSpacing: 0.4 },
@@ -334,19 +400,18 @@ const styles = StyleSheet.create({
   puce: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, minWidth: 120 },
   puceLabel: { color: '#687581', fontSize: 11, fontWeight: '500' },
   puceValeur: { color: '#0F2D46', fontSize: 14, fontWeight: '600', marginTop: 2 },
-  table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden' },
+  table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden', minWidth: 980 },
   ligneEntete: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#0F2D46' },
   ligne: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#FFFFFF' },
   ligneAlt: { backgroundColor: '#F8FAFC' },
-  cellule: { flex: 1, paddingVertical: 10, paddingHorizontal: 10, color: '#0F2D46', fontSize: 13 },
-  celluleLabel: { flex: 1.15, fontWeight: '700' },
+  cellule: { width: 168, paddingVertical: 10, paddingHorizontal: 10, color: '#0F2D46', fontSize: 13 },
+  celluleLabel: { width: 188, fontWeight: '700' },
   celluleValeur: { fontWeight: '700' },
-  celluleModele: { flex: 1, paddingVertical: 10, paddingHorizontal: 10, gap: 2 },
+  celluleModele: { width: 168, paddingVertical: 10, paddingHorizontal: 10, gap: 2 },
   colonneRecommandee: { backgroundColor: '#FFF8E1' },
   enteteRecommande: { borderBottomWidth: 3, borderBottomColor: '#F4C430' },
   enteteTexte: { color: '#F8FAFC', fontWeight: '700' },
-  modeleNom: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
-  modeleAlgo: { color: '#F4C430', fontSize: 11, fontWeight: '500' },
+  modeleNom: { color: '#FFFFFF', fontSize: 12, fontWeight: '600', lineHeight: 16 },
   modeleWape: { color: '#E2E8F0', fontSize: 11 },
   badge: { alignSelf: 'flex-start', marginTop: 4, backgroundColor: '#F4C430', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, flexDirection: 'row', alignItems: 'center', gap: 4 },
   badgeTexte: { color: '#0F2D46', fontSize: 11, fontWeight: '600' },

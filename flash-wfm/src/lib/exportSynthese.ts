@@ -14,16 +14,21 @@ export type ModeleSynthese = {
   pic: string;
 };
 
+export type IdSynthese = 'auto' | 'ia' | 'saison' | 'hybride';
+
+export type ColonneSynthese = {
+  id: IdSynthese;
+  nom: string;
+  donnees: ModeleSynthese | null;
+};
+
 export type DossierSynthese = {
   hypotheses: Hypothese[];
-  holt: ModeleSynthese | null;
-  light: ModeleSynthese | null;
-  recommande: 'holt' | 'light' | null;
+  modeles: ColonneSynthese[];
+  recommande: IdSynthese | null;
   verdict: string;
 };
 
-const NOM_HOLT = 'Modèle Tendance (Holt-Winters)';
-const NOM_LIGHT = 'Modèle IA (LightGBM)';
 const FICHIER = 'Synthese_Staffing_FlashWFM';
 
 const BORD_FIN = { style: 'thin', color: { rgb: 'E2E8F0' } };
@@ -35,8 +40,7 @@ function dateDuJour() {
   return new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-function nomModele(id: 'holt' | 'light', recommande: boolean) {
-  const nom = id === 'holt' ? NOM_HOLT : NOM_LIGHT;
+function nomModele(nom: string, recommande: boolean) {
   return recommande ? `${nom}\nRecommandé` : nom;
 }
 
@@ -46,9 +50,9 @@ function texteWape(wape: number | null) {
 }
 
 function texteRecommande(dossier: DossierSynthese) {
-  if (dossier.recommande === 'holt') return `${NOM_HOLT} — ${texteWape(dossier.holt?.wape ?? null)}`;
-  if (dossier.recommande === 'light') return `${NOM_LIGHT} — ${texteWape(dossier.light?.wape ?? null)}`;
-  return 'Non déterminé — WAPE indisponible';
+  const retenu = dossier.modeles.find((modele) => modele.id === dossier.recommande);
+  if (!retenu) return 'Non déterminé — WAPE indisponible';
+  return `${retenu.nom} — ${texteWape(retenu.donnees?.wape ?? null)}`;
 }
 
 function valeurModele(modele: ModeleSynthese | null, champ: 'volume' | 'etpMoyen' | 'ecart') {
@@ -91,26 +95,34 @@ function largeur(textes: string[], min: number, max: number) {
   return { wch: Math.min(max, plusLong + 3) };
 }
 
+function ligneComplete(cellules: (string | number)[], largeur: number) {
+  const ligne = [...cellules];
+  while (ligne.length < largeur) ligne.push('');
+  return ligne;
+}
+
 export function classeurSynthese(dossier: DossierSynthese) {
   const hypotheses = dossier.hypotheses;
+  const modeles = dossier.modeles;
+  const largeurLigne = modeles.length + 1;
   const lignes: (string | number)[][] = [
-    ['Fiche de Synthèse Exécutive - Flash WFM', '', ''],
-    [dateDuJour(), '', ''],
-    [],
-    ['Hypothèses', '', ''],
-    ['Paramètre', 'Valeur', ''],
-    ...hypotheses.map((ligne) => [ligne.label, ligne.valeur, '']),
-    [],
-    ['Comparatif des modèles', '', ''],
-    ['Indicateur', nomModele('holt', dossier.recommande === 'holt'), nomModele('light', dossier.recommande === 'light')],
-    ['Volume total prévu', valeurModele(dossier.holt, 'volume'), valeurModele(dossier.light, 'volume')],
-    ['ETP requis moyen', valeurModele(dossier.holt, 'etpMoyen'), valeurModele(dossier.light, 'etpMoyen')],
-    ['Écart vs effectif dispo', valeurModele(dossier.holt, 'ecart'), valeurModele(dossier.light, 'ecart')],
-    ['Pic de besoin maximal', dossier.holt?.pic ?? '—', dossier.light?.pic ?? '—'],
-    [],
-    ['Verdict', '', ''],
-    ['Modèle recommandé', texteRecommande(dossier), ''],
-    [dossier.verdict, '', ''],
+    ligneComplete(['Fiche de Synthèse Exécutive - Flash WFM'], largeurLigne),
+    ligneComplete([dateDuJour()], largeurLigne),
+    ligneComplete([], largeurLigne),
+    ligneComplete(['Hypothèses'], largeurLigne),
+    ligneComplete(['Paramètre', 'Valeur'], largeurLigne),
+    ...hypotheses.map((ligne) => ligneComplete([ligne.label, ligne.valeur], largeurLigne)),
+    ligneComplete([], largeurLigne),
+    ligneComplete(['Comparatif des modèles'], largeurLigne),
+    ['Indicateur', ...modeles.map((modele) => nomModele(modele.nom, dossier.recommande === modele.id))],
+    ['Volume total prévu', ...modeles.map((modele) => valeurModele(modele.donnees, 'volume'))],
+    ['ETP requis moyen', ...modeles.map((modele) => valeurModele(modele.donnees, 'etpMoyen'))],
+    ['Écart vs effectif dispo', ...modeles.map((modele) => valeurModele(modele.donnees, 'ecart'))],
+    ['Pic de besoin maximal', ...modeles.map((modele) => modele.donnees?.pic ?? '—')],
+    ligneComplete([], largeurLigne),
+    ligneComplete(['Verdict'], largeurLigne),
+    ligneComplete(['Modèle recommandé', texteRecommande(dossier)], largeurLigne),
+    ligneComplete([dossier.verdict], largeurLigne),
   ];
 
   const debutHypotheses = 5;
@@ -124,19 +136,19 @@ export function classeurSynthese(dossier: DossierSynthese) {
   const lignePhrase = ligneReco + 1;
 
   const feuille = XLSXStyle.utils.aoa_to_sheet(lignes);
+  const derniere = largeurLigne - 1;
   feuille['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 2 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 2 } },
-    { s: { r: 3, c: 0 }, e: { r: 3, c: 2 } },
-    { s: { r: enteteComparatif - 1, c: 0 }, e: { r: enteteComparatif - 1, c: 2 } },
-    { s: { r: lignePic + 2, c: 0 }, e: { r: lignePic + 2, c: 2 } },
-    { s: { r: ligneReco, c: 1 }, e: { r: ligneReco, c: 2 } },
-    { s: { r: lignePhrase, c: 0 }, e: { r: lignePhrase, c: 2 } },
+    { s: { r: 0, c: 0 }, e: { r: 0, c: derniere } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: derniere } },
+    { s: { r: 3, c: 0 }, e: { r: 3, c: derniere } },
+    { s: { r: enteteComparatif - 1, c: 0 }, e: { r: enteteComparatif - 1, c: derniere } },
+    { s: { r: lignePic + 2, c: 0 }, e: { r: lignePic + 2, c: derniere } },
+    { s: { r: ligneReco, c: 1 }, e: { r: ligneReco, c: derniere } },
+    { s: { r: lignePhrase, c: 0 }, e: { r: lignePhrase, c: derniere } },
   ];
   feuille['!cols'] = [
     largeur(hypotheses.map((ligne) => ligne.label).concat(['Écart vs effectif dispo', 'Pic de besoin maximal', 'Modèle recommandé']), 24, 36),
-    largeur([NOM_HOLT, 'Recommandé', texteRecommande(dossier)], 28, 42),
-    largeur([NOM_LIGHT, 'Recommandé'], 28, 42),
+    ...modeles.map((modele) => largeur([modele.nom, 'Recommandé', texteRecommande(dossier)], 24, 36)),
   ];
   const hauteurs: { hpt: number }[] = [];
   hauteurs[0] = { hpt: 30 };
@@ -193,13 +205,12 @@ export function classeurSynthese(dossier: DossierSynthese) {
   });
 
   poser(enteteComparatif - 1, 0, section);
-  for (let colonne = 0; colonne < 3; colonne += 1) poser(enteteComparatif, colonne, styleEntete());
+  for (let colonne = 0; colonne < largeurLigne; colonne += 1) poser(enteteComparatif, colonne, styleEntete());
 
   const poserComparatif = (ligne: number, format?: string, ecart = false) => {
     poser(ligne, 0, libelle);
-    (['holt', 'light'] as const).forEach((id, index) => {
-      const modele = dossier[id];
-      const recommande = dossier.recommande === id;
+    modeles.forEach((colonne, index) => {
+      const recommande = dossier.recommande === colonne.id;
       const brut = feuille[XLSXStyle.utils.encode_cell({ r: ligne, c: index + 1 })]?.v;
       if (ecart && typeof brut === 'number') {
         poser(ligne, index + 1, styleEcart(brut), '#,##0.0');
@@ -280,15 +291,13 @@ export async function exporterSynthesePptx(dossier: DossierSynthese) {
       return [cellulePpt(ligne.label, { fill: fond, bold: true }), cellulePpt(valeur, { fill: fond, align: 'right' })];
     }),
   ];
-  slide.addText('Hypothèses', { x: 0.35, y: 1.08, w: 5.6, h: 0.28, fontFace: 'Calibri', fontSize: 14, bold: true, color: '0F2D46', margin: 0 });
+  slide.addText('Hypothèses', { x: 0.35, y: 1.02, w: 12.6, h: 0.24, fontFace: 'Calibri', fontSize: 14, bold: true, color: '0F2D46', margin: 0 });
   slide.addTable(hyp, {
-    x: 0.35, y: 1.4, w: 5.7, colW: [2.7, 3], fontFace: 'Calibri', fontSize: 11,
-    border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle',
+    x: 0.35, y: 1.28, w: 12.6, colW: [3.2, 9.4], fontFace: 'Calibri', fontSize: 11,
+    border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle', rowH: 0.22,
   });
 
-  const colonne = (id: 'holt' | 'light', champ: 'volume' | 'etpMoyen' | 'ecart' | 'pic') => {
-    const modele = dossier[id];
-    const recommande = dossier.recommande === id;
+  const colonne = (modele: ModeleSynthese | null, recommande: boolean, champ: 'volume' | 'etpMoyen' | 'ecart' | 'pic') => {
     if (!modele) return cellulePpt('—', { fill: recommande ? 'FFF8E1' : 'FFFFFF' });
     if (champ === 'pic') return cellulePpt(modele.pic, { fill: recommande ? 'FFF8E1' : 'FFFFFF' });
     const brut = modele[champ];
@@ -312,26 +321,25 @@ export async function exporterSynthesePptx(dossier: DossierSynthese) {
   const comp = [
     [
       cellulePpt('Indicateur', entete),
-      cellulePpt(nomModele('holt', dossier.recommande === 'holt'), entete),
-      cellulePpt(nomModele('light', dossier.recommande === 'light'), entete),
+      ...dossier.modeles.map((modele) => cellulePpt(nomModele(modele.nom, dossier.recommande === modele.id), entete)),
     ],
-    [cellulePpt('Volume total prévu', { bold: true }), colonne('holt', 'volume'), colonne('light', 'volume')],
-    [cellulePpt('ETP requis moyen', { bold: true }), colonne('holt', 'etpMoyen'), colonne('light', 'etpMoyen')],
-    [cellulePpt('Écart vs effectif dispo', { bold: true }), colonne('holt', 'ecart'), colonne('light', 'ecart')],
-    [cellulePpt('Pic de besoin maximal', { bold: true }), colonne('holt', 'pic'), colonne('light', 'pic')],
+    [cellulePpt('Volume total prévu', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'volume'))],
+    [cellulePpt('ETP requis moyen', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'etpMoyen'))],
+    [cellulePpt('Écart vs effectif dispo', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'ecart'))],
+    [cellulePpt('Pic de besoin maximal', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'pic'))],
   ];
-  slide.addText('Comparatif des modèles', { x: 6.25, y: 1.08, w: 6.7, h: 0.28, fontFace: 'Calibri', fontSize: 14, bold: true, color: '0F2D46', margin: 0 });
+  slide.addText('Comparatif des modèles', { x: 0.35, y: 3.55, w: 12.6, h: 0.24, fontFace: 'Calibri', fontSize: 14, bold: true, color: '0F2D46', margin: 0 });
   slide.addTable(comp, {
-    x: 6.25, y: 1.4, w: 6.7, colW: [2.3, 2.2, 2.2], fontFace: 'Calibri', fontSize: 11,
-    border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle',
+    x: 0.35, y: 3.82, w: 12.6, colW: [2.2, 2.6, 2.6, 2.6, 2.6], fontFace: 'Calibri', fontSize: 10,
+    border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle', rowH: [0.46, 0.26, 0.26, 0.26, 0.34],
   });
 
   slide.addShape(pptx.ShapeType.rect, {
-    x: 0.35, y: 5.85, w: 12.63, h: 1.35, fill: { color: 'F8FAFC' }, line: { color: '0F2D46', width: 1.25 },
+    x: 0.35, y: 5.55, w: 12.63, h: 1.7, fill: { color: 'F8FAFC' }, line: { color: '0F2D46', width: 1.25 },
   });
-  slide.addText('Verdict', { x: 0.55, y: 5.95, w: 12, h: 0.26, fontFace: 'Calibri', fontSize: 13, bold: true, color: '0F2D46', margin: 0 });
+  slide.addText('Verdict', { x: 0.55, y: 5.65, w: 12, h: 0.24, fontFace: 'Calibri', fontSize: 13, bold: true, color: '0F2D46', margin: 0 });
   slide.addText(`${texteRecommande(dossier)}\n${dossier.verdict}`, {
-    x: 0.55, y: 6.24, w: 12.2, h: 0.82, fontFace: 'Calibri', fontSize: 13, color: '0F2D46', margin: 0,
+    x: 0.55, y: 5.92, w: 12.2, h: 1.2, fontFace: 'Calibri', fontSize: 13, color: '0F2D46', margin: 0,
   });
 
   await pptx.writeFile({ fileName: `${FICHIER}.pptx` });
