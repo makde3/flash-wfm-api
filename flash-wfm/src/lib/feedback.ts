@@ -17,7 +17,7 @@ export async function envoyerRetour(type: TypeRetour, message: string): Promise<
     message: texte,
   });
   if (error) throw error;
-  void sendDiscordNotif(
+  await sendDiscordNotif(
     'Feedback',
     `Type : ${type}\nE-mail : ${data.user.email ?? 'inconnu'}\n\n${texte}`,
     'feedback',
