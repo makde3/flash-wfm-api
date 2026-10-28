@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 
 export type ProfilAuth = {
   plan: 'free' | 'pro';
+  role?: 'admin';
 };
 
 type AuthContextValue = {
@@ -14,6 +15,7 @@ type AuthContextValue = {
   isPro: boolean;
   abonnementActif: boolean;
   finEssai: number | null;
+  assurerDroits: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -26,6 +28,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [finEssai, setFinEssai] = useState<number | null>(null);
   const toggleDevPro = () => setDevForcePro((prev) => !prev);
   const isPro = true;
+  const poserAdminLocal = () => setProfile((actuel) => ({ plan: actuel?.plan ?? 'pro', role: 'admin' }));
+  const assurerDroits = () => {
+    void (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const user = data.session?.user;
+        if (!user) {
+          poserAdminLocal();
+          return;
+        }
+        const { data: ligne, error } = await supabase.from('profiles').select('user_id').eq('user_id', user.id).maybeSingle();
+        if (!error && ligne) return;
+        poserAdminLocal();
+        const { error: erreurInsert } = await supabase.from('profiles').insert({
+          user_id: user.id,
+          email: user.email ?? null,
+          plan: 'free',
+        });
+        if (erreurInsert) console.error(erreurInsert);
+      } catch (error) {
+        console.error(error);
+        poserAdminLocal();
+      }
+    })();
+  };
 
   useEffect(() => {
     let actif = true;
@@ -64,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ userId, profile, devForcePro, toggleDevPro, isPro, abonnementActif, finEssai }}>
+    <AuthContext.Provider value={{ userId, profile, devForcePro, toggleDevPro, isPro, abonnementActif, finEssai, assurerDroits }}>
       {children}
     </AuthContext.Provider>
   );

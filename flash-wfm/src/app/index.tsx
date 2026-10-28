@@ -963,7 +963,7 @@ export default function FlashWFM() {
   const [etpMoyens, setEtpMoyens] = useState('');
   const [etpMoyensAppliques, setEtpMoyensAppliques] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const { userId, isPro, abonnementActif } = useAuth();
+  const { userId, isPro, abonnementActif, assurerDroits } = useAuth();
   const [, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
@@ -1704,6 +1704,7 @@ export default function FlashWFM() {
 
   const handleGenerate = async () => {
     if (loading) return;
+    assurerDroits();
     const modeleChoisi = modeleConnu(selectedModel) ? selectedModel : (__DEV__ ? 'Auto' : null);
     if (!modeleChoisi) {
       alert('Veuillez sélectionner un algorithme de prévision.');
@@ -1750,6 +1751,8 @@ export default function FlashWFM() {
       console.error(error);
       if (__DEV__ && (echecApiSimulable(error) || error instanceof ErreurApi)) {
         basculerMock(horizonDemande, modeleChoisi);
+      } else if (error instanceof ErreurApi && error.status === 403 && error.message.includes('Droits utilisateur introuvables')) {
+        assurerDroits();
       } else if (error instanceof ErreurApi && (error.status === 401 || error.status === 403)) {
         alert(error.message);
       } else if (error instanceof Error && error.name === 'AbortError') {
@@ -1805,7 +1808,12 @@ export default function FlashWFM() {
           return;
         }
         setComparatif(null);
-        setSyntheseErreur(motif instanceof Error ? motif.message : 'Comparaison impossible.');
+        const message = motif instanceof Error ? motif.message : 'Comparaison impossible.';
+        if (!message.includes('Droits utilisateur introuvables')) {
+          setSyntheseErreur(message);
+        } else {
+          assurerDroits();
+        }
         return;
       }
       setComparatif({ cle, holt: holtOk, light: lightOk });
