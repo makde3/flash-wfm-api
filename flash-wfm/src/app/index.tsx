@@ -75,6 +75,104 @@ function plansSkillsVides(): PlansSkills {
   return { court_terme: null, long_terme: null };
 }
 
+function skillAffiche(skill: string, multi: boolean, series: SerieSkill[]) {
+  return multi && skill !== VUE_GLOBALE && series.some((serie) => serie.skill === skill) ? skill : VUE_GLOBALE;
+}
+
+function planDuSkill(
+  skill: string,
+  plansParSkill: PlansSkills,
+  plans: Record<Horizon, PlanLigne[] | null>,
+  horizon: Horizon,
+) {
+  const paquet = plansParSkill[horizon];
+  if (paquet) {
+    if (skill === VUE_GLOBALE) return consoliderPlans(Object.values(paquet));
+    return paquet[skill] ?? null;
+  }
+  return plans[horizon];
+}
+
+function etpSaisiDuSkill(
+  skill: string,
+  multi: boolean,
+  series: SerieSkill[],
+  ciblesSkills: Record<string, SkillConfig>,
+  etpMoyensAppliques: number | null,
+) {
+  const lire = (nom: string) => {
+    const lu = nombre(ciblesSkills[nom]?.etp ?? '');
+    return lu != null && lu >= 0 ? lu : null;
+  };
+  if (!multi) return etpMoyensAppliques;
+  if (skill !== VUE_GLOBALE) return lire(skill);
+  const valeurs = series.map((serie) => lire(serie.skill)).filter((valeur): valeur is number => valeur != null);
+  if (!valeurs.length) return etpMoyensAppliques;
+  return valeurs.reduce((somme, valeur) => somme + valeur, 0);
+}
+
+function ciblesDuSkill(
+  skill: string,
+  multi: boolean,
+  series: SerieSkill[],
+  ciblesSkills: Record<string, SkillConfig>,
+  plansParSkill: PlansSkills,
+  horizon: Horizon,
+  socle: { aht: string; sla: string; shrinkage: string; tempsCible: string; tauxOccupation: string; heuresOuverture: string; delaiTraitementHeures: string },
+) {
+  const secours = {
+    dmt: socle.aht || '360',
+    sla: socle.sla || '80',
+    shrinkage: socle.shrinkage || '25',
+    delaiCible: socle.tempsCible || '20',
+    occupation: socle.tauxOccupation || '85',
+    amplitude: socle.heuresOuverture || '8',
+    delaiTraitement: socle.delaiTraitementHeures || '24',
+    heuresTravaillees: heuresTravailleesParDefaut(socle.heuresOuverture || '8', socle.shrinkage || '25'),
+  };
+  const lireConfig = (cible: SkillConfig | undefined) => ({
+    dmt: cible?.dmt || secours.dmt,
+    sla: cible?.sla || secours.sla,
+    shrinkage: cible?.shrinkage || secours.shrinkage,
+    delaiCible: cible?.delaiCible || secours.delaiCible,
+    occupation: cible?.occupation || secours.occupation,
+    amplitude: cible?.amplitude || secours.amplitude,
+    delaiTraitement: cible?.delaiTraitement || secours.delaiTraitement,
+    heuresTravaillees: cible?.heuresTravaillees || secours.heuresTravaillees,
+  });
+  const skillCible = !multi ? (series[0]?.skill ?? SKILL_DEFAUT) : (skill === VUE_GLOBALE ? null : skill);
+  if (skillCible) return lireConfig(ciblesSkills[skillCible]);
+  const paquet = plansParSkill[horizon];
+  const volumes: Record<string, number> = {};
+  for (const serie of series) {
+    volumes[serie.skill] = (paquet?.[serie.skill] ?? []).reduce((somme, ligne) => somme + ligne.volume_prevu, 0) || serie.volumeTotal;
+  }
+  const lire = (champ: 'dmt' | 'sla' | 'shrinkage' | 'delaiCible' | 'occupation' | 'amplitude' | 'delaiTraitement' | 'heuresTravaillees') => {
+    const valeur = moyennePonderee(series, ciblesSkills, volumes, champ);
+    return valeur == null ? secours[champ] : String(valeur);
+  };
+  return {
+    dmt: lire('dmt'),
+    sla: lire('sla'),
+    shrinkage: lire('shrinkage'),
+    delaiCible: lire('delaiCible'),
+    occupation: lire('occupation'),
+    amplitude: lire('amplitude'),
+    delaiTraitement: lire('delaiTraitement'),
+    heuresTravaillees: lire('heuresTravaillees'),
+  };
+}
+
+function etpDispoMoyenDe(planningVue: boolean, couvertures: LigneCouverture[] | null, etpSaisie: number | null) {
+  if (planningVue && couvertures) {
+    const valeurs = couvertures.map((ligne) => ligne.etpDispo).filter((valeur): valeur is number => valeur != null);
+    const moy = moyenne(valeurs);
+    if (moy != null) return moy;
+  }
+  if (!planningVue && etpSaisie != null) return etpSaisie;
+  return null;
+}
+
 const MODES_PREVISION: { id: 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride'; titre: string; sous?: string }[] = [
   { id: 'Auto', titre: 'Auto (Recommandé)' },
   { id: 'LightGBM', titre: 'IA & Machine Learning' },
@@ -1005,6 +1103,7 @@ export default function FlashWFM() {
   const [plansParSkill, setPlansParSkill] = useState<PlansSkills>(plansSkillsVides());
   const [ciblesSkills, setCiblesSkills] = useState<Record<string, SkillConfig>>({});
   const [skillActif, setSkillActif] = useState(VUE_GLOBALE);
+  const [skillSynthese, setSkillSynthese] = useState(VUE_GLOBALE);
   const [remplissage, setRemplissage] = useState({ sla: '80', delai: '20', occupation: '85' });
   const [etpMoyens, setEtpMoyens] = useState('');
   const [etpMoyensAppliques, setEtpMoyensAppliques] = useState<number | null>(null);
@@ -1033,29 +1132,19 @@ export default function FlashWFM() {
   const suspendrePersistance = useRef(false);
   const series = useMemo(() => (dataPreview ? analyserHistorique(dataPreview) : []), [dataPreview]);
   const multi = series.length > 1;
-  const skillCourant = multi && skillActif !== VUE_GLOBALE && series.some((serie) => serie.skill === skillActif) ? skillActif : VUE_GLOBALE;
+  const skillCourant = skillAffiche(skillActif, multi, series);
+  const skillSyntheseCourant = skillAffiche(skillSynthese, multi, series);
   const perimetre = series.length ? (multi ? libellePerimetre(skillCourant) : series[0].skill) : SKILL_DEFAUT;
-  const plan = useMemo(() => {
-    const paquet = plansParSkill[horizon];
-    if (paquet) {
-      if (skillCourant === VUE_GLOBALE) return consoliderPlans(Object.values(paquet));
-      return paquet[skillCourant] ?? null;
-    }
-    return plans[horizon];
-  }, [plansParSkill, plans, horizon, skillCourant]);
+  const plan = useMemo(
+    () => planDuSkill(skillCourant, plansParSkill, plans, horizon),
+    [skillCourant, plansParSkill, plans, horizon],
+  );
   const planningActif = isPro && etpStatut === 'valide' && !!etpPlanning?.length;
   const dmtFichier = useMemo(() => dmtPondere(series), [series]);
-  const etpSaisieVue = useMemo(() => {
-    const lire = (skill: string) => {
-      const lu = nombre(ciblesSkills[skill]?.etp ?? '');
-      return lu != null && lu >= 0 ? lu : null;
-    };
-    if (!multi) return etpMoyensAppliques;
-    if (skillCourant !== VUE_GLOBALE) return lire(skillCourant);
-    const valeurs = series.map((serie) => lire(serie.skill)).filter((valeur): valeur is number => valeur != null);
-    if (!valeurs.length) return etpMoyensAppliques;
-    return valeurs.reduce((somme, valeur) => somme + valeur, 0);
-  }, [multi, skillCourant, series, ciblesSkills, etpMoyensAppliques]);
+  const etpSaisieVue = useMemo(
+    () => etpSaisiDuSkill(skillCourant, multi, series, ciblesSkills, etpMoyensAppliques),
+    [skillCourant, multi, series, ciblesSkills, etpMoyensAppliques],
+  );
   const planningVue = planningActif && (!multi || skillCourant === VUE_GLOBALE);
   const couvertures = useMemo(() => {
     if (!plan) return null;
@@ -1064,60 +1153,37 @@ export default function FlashWFM() {
     return couverturesDuPlan(plan, null, etpSaisieVue);
   }, [plan, planningVue, etpPlanning, isPro, etpSaisieVue]);
   const periodesSansEtp = !!couvertures && planningVue && couvertures.some((ligne) => ligne.etpDispo == null);
-  const ciblesVue = useMemo(() => {
-    const secours = {
-      dmt: aht || '360',
-      sla: sla || '80',
-      shrinkage: shrinkage || '25',
-      delaiCible: tempsCible || '20',
-      occupation: tauxOccupation || '85',
-      amplitude: heuresOuverture || '8',
-      delaiTraitement: delaiTraitementHeures || '24',
-      heuresTravaillees: heuresTravailleesParDefaut(heuresOuverture || '8', shrinkage || '25'),
-    };
-    const lireConfig = (cible: SkillConfig | undefined) => ({
-      dmt: cible?.dmt || secours.dmt,
-      sla: cible?.sla || secours.sla,
-      shrinkage: cible?.shrinkage || secours.shrinkage,
-      delaiCible: cible?.delaiCible || secours.delaiCible,
-      occupation: cible?.occupation || secours.occupation,
-      amplitude: cible?.amplitude || secours.amplitude,
-      delaiTraitement: cible?.delaiTraitement || secours.delaiTraitement,
-      heuresTravaillees: cible?.heuresTravaillees || secours.heuresTravaillees,
-    });
-    const skillCible = !multi ? (series[0]?.skill ?? SKILL_DEFAUT) : (skillCourant === VUE_GLOBALE ? null : skillCourant);
-    if (skillCible) return lireConfig(ciblesSkills[skillCible]);
-    const paquet = plansParSkill[horizon];
-    const volumes: Record<string, number> = {};
-    for (const serie of series) {
-      volumes[serie.skill] = (paquet?.[serie.skill] ?? []).reduce((somme, ligne) => somme + ligne.volume_prevu, 0) || serie.volumeTotal;
-    }
-    const lire = (champ: 'dmt' | 'sla' | 'shrinkage' | 'delaiCible' | 'occupation' | 'amplitude' | 'delaiTraitement' | 'heuresTravaillees') => {
-      const valeur = moyennePonderee(series, ciblesSkills, volumes, champ);
-      return valeur == null ? secours[champ] : String(valeur);
-    };
+  const socleCibles = useMemo(() => ({
+    aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures,
+  }), [aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures]);
+  const ciblesVue = useMemo(
+    () => ciblesDuSkill(skillCourant, multi, series, ciblesSkills, plansParSkill, horizon, socleCibles),
+    [skillCourant, multi, series, ciblesSkills, plansParSkill, horizon, socleCibles],
+  );
+  const etpDispoMoyen = useMemo(
+    () => etpDispoMoyenDe(planningVue, couvertures, etpSaisieVue),
+    [planningVue, couvertures, etpSaisieVue],
+  );
+  const cadreSynthese = useMemo(() => {
+    const planCible = planDuSkill(skillSyntheseCourant, plansParSkill, plans, horizon);
+    const etpSaisie = etpSaisiDuSkill(skillSyntheseCourant, multi, series, ciblesSkills, etpMoyensAppliques);
+    const avecPlanning = planningActif && (!multi || skillSyntheseCourant === VUE_GLOBALE);
+    const couverturesCible = !planCible
+      ? null
+      : avecPlanning
+        ? couverturesDuPlan(planCible, etpPlanning, null)
+        : isPro
+          ? couverturesDuPlan(planCible, null, etpSaisie)
+          : null;
     return {
-      dmt: lire('dmt'),
-      sla: lire('sla'),
-      shrinkage: lire('shrinkage'),
-      delaiCible: lire('delaiCible'),
-      occupation: lire('occupation'),
-      amplitude: lire('amplitude'),
-      delaiTraitement: lire('delaiTraitement'),
-      heuresTravaillees: lire('heuresTravaillees'),
+      perimetre: series.length ? (multi ? libellePerimetre(skillSyntheseCourant) : series[0].skill) : SKILL_DEFAUT,
+      cibles: ciblesDuSkill(skillSyntheseCourant, multi, series, ciblesSkills, plansParSkill, horizon, socleCibles),
+      planning: avecPlanning ? etpPlanning : null,
+      etpDispo: etpDispoMoyenDe(avecPlanning, couverturesCible, etpSaisie),
+      holt: vueDesPlans(comparatif?.holt ?? null, skillSyntheseCourant),
+      light: vueDesPlans(comparatif?.light ?? null, skillSyntheseCourant),
     };
-  }, [multi, skillCourant, ciblesSkills, aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures, series, plansParSkill, horizon]);
-  const holtVue = useMemo(() => vueDesPlans(comparatif?.holt ?? null, skillCourant), [comparatif, skillCourant]);
-  const lightVue = useMemo(() => vueDesPlans(comparatif?.light ?? null, skillCourant), [comparatif, skillCourant]);
-  const etpDispoMoyen = useMemo(() => {
-    if (planningVue && couvertures) {
-      const valeurs = couvertures.map((ligne) => ligne.etpDispo).filter((valeur): valeur is number => valeur != null);
-      const moy = moyenne(valeurs);
-      if (moy != null) return moy;
-    }
-    if (!planningVue && etpSaisieVue != null) return etpSaisieVue;
-    return null;
-  }, [planningVue, couvertures, etpSaisieVue]);
+  }, [skillSyntheseCourant, plansParSkill, plans, horizon, multi, series, ciblesSkills, etpMoyensAppliques, planningActif, etpPlanning, isPro, socleCibles, comparatif]);
 
   const appliquerVierge = useCallback(() => {
     setCurrentStep(1);
@@ -1143,6 +1209,7 @@ export default function FlashWFM() {
     setPlansParSkill(plansSkillsVides());
     setCiblesSkills({});
     setSkillActif(VUE_GLOBALE);
+    setSkillSynthese(VUE_GLOBALE);
     setEtpMoyens('');
     setEtpMoyensAppliques(null);
     setSourceHistorique('fichier');
@@ -1180,6 +1247,10 @@ export default function FlashWFM() {
     setEtpMoyens(cache.etpMoyens);
     setEtpMoyensAppliques(cache.etpMoyensAppliques);
   }, []);
+
+  useEffect(() => {
+    if (currentStep === 4) setSkillSynthese(VUE_GLOBALE);
+  }, [currentStep]);
 
   useEffect(() => {
     let ignore = false;
@@ -1837,6 +1908,7 @@ export default function FlashWFM() {
   };
 
   const ouvrirSynthese = async () => {
+    setSkillSynthese(VUE_GLOBALE);
     setSyntheseOuverte(true);
     const cle = cleComparatif();
     if (comparatif?.cle === cle && (comparatif.holt || comparatif.light)) return;
@@ -2305,21 +2377,21 @@ export default function FlashWFM() {
         erreur={syntheseErreur}
         onFermer={() => setSyntheseOuverte(false)}
         typeFlux={typeFlux}
-        aht={ciblesVue.dmt}
-        sla={ciblesVue.sla}
-        tempsCible={ciblesVue.delaiCible}
-        delaiTraitementHeures={ciblesVue.delaiTraitement}
-        tauxOccupation={ciblesVue.occupation}
-        shrinkage={ciblesVue.shrinkage}
-        heuresOuverture={ciblesVue.amplitude}
-        etpDispo={etpDispoMoyen}
-        planning={planningVue ? etpPlanning : null}
-        perimetre={perimetre}
+        aht={cadreSynthese.cibles.dmt}
+        sla={cadreSynthese.cibles.sla}
+        tempsCible={cadreSynthese.cibles.delaiCible}
+        delaiTraitementHeures={cadreSynthese.cibles.delaiTraitement}
+        tauxOccupation={cadreSynthese.cibles.occupation}
+        shrinkage={cadreSynthese.cibles.shrinkage}
+        heuresOuverture={cadreSynthese.cibles.amplitude}
+        etpDispo={cadreSynthese.etpDispo}
+        planning={cadreSynthese.planning}
+        perimetre={cadreSynthese.perimetre}
         skills={series.map((serie) => serie.skill)}
-        skillActif={skillCourant}
-        onSkill={setSkillActif}
-        holt={holtVue}
-        light={lightVue}
+        skillActif={skillSyntheseCourant}
+        onSkill={setSkillSynthese}
+        holt={cadreSynthese.holt}
+        light={cadreSynthese.light}
       />
       <ModaleFeedback
         visible={feedbackOuvert}

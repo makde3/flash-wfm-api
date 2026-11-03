@@ -1,6 +1,8 @@
+import { useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SelecteurSkill from './SelecteurSkill';
+import { VUE_GLOBALE } from '../lib/skills';
 import { exporterSyntheseExcel, exporterSynthesePptx, type DossierSynthese, type IdSynthese, type ModeleSynthese } from '../lib/exportSynthese';
 import { couverturesDuPlan, type EtpJour, type PlanLigne, type TypeFlux } from '../lib/wizard';
 
@@ -210,6 +212,9 @@ export default function SyntheseExecutive({
   holt,
   light,
 }: Props) {
+  useEffect(() => {
+    if (visible) onSkill(VUE_GLOBALE);
+  }, [visible, onSkill]);
   const saison = holt?.plan.length ? holt : null;
   const ia = light?.plan.length ? light : null;
   const colonnes: { id: IdSynthese; nom: string; resultat: ResultatModele | null }[] = [
