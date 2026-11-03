@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIn
 import { Ionicons } from '@expo/vector-icons';
 import SelecteurSkill from './SelecteurSkill';
 import { VUE_GLOBALE } from '../lib/skills';
+import { appliquerAjustements } from '../lib/ajustements';
 import { exporterSyntheseExcel, exporterSynthesePptx, type DossierSynthese, type IdSynthese, type ModeleSynthese } from '../lib/exportSynthese';
 import { couverturesDuPlan, type EtpJour, type PlanLigne, type TypeFlux } from '../lib/wizard';
 
@@ -15,7 +16,8 @@ type Indicateur = {
   id: IdSynthese;
   nom: string;
   wape: number | null;
-  volume: number;
+  volumeBrut: number;
+  volumeAjuste: number;
   etpMoyen: number;
   dispo: number | null;
   ecart: number | null;
@@ -45,6 +47,7 @@ type Props = {
   onSkill: (skill: string) => void;
   holt: ResultatModele | null;
   light: ResultatModele | null;
+  pourcentages: Record<string, string>;
 };
 
 function nombreFR(valeur: number, decimales: number) {
@@ -106,18 +109,21 @@ function resultatHybride(holt: ResultatModele | null, light: ResultatModele | nu
   };
 }
 
-function indiquer(id: IdSynthese, nom: string, resultat: ResultatModele, planning: EtpJour[] | null, etpDispo: number | null): Indicateur {
-  const volume = resultat.plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
-  const etpMoyen = resultat.plan.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / resultat.plan.length;
-  const couvertures = couverturesDuPlan(resultat.plan, planning, planning ? null : etpDispo);
+function indiquer(id: IdSynthese, nom: string, resultat: ResultatModele, planning: EtpJour[] | null, etpDispo: number | null, pourcentages: Record<string, string>): Indicateur {
+  const ajuste = appliquerAjustements(resultat.plan, pourcentages);
+  const volumeBrut = resultat.plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
+  const volumeAjuste = ajuste.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
+  const etpMoyen = ajuste.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / ajuste.length;
+  const couvertures = couverturesDuPlan(ajuste, planning, planning ? null : etpDispo);
   const ecarts = (couvertures ?? []).map((ligne) => ligne.ecart).filter((valeur): valeur is number => valeur != null && Number.isFinite(valeur));
   const dispos = (couvertures ?? []).map((ligne) => ligne.etpDispo).filter((valeur): valeur is number => valeur != null && Number.isFinite(valeur));
-  const pic = resultat.plan.reduce((meilleur, ligne) => (ligne.etp_moyen_requis > meilleur.etp_moyen_requis ? ligne : meilleur));
+  const pic = ajuste.reduce((meilleur, ligne) => (ligne.etp_moyen_requis > meilleur.etp_moyen_requis ? ligne : meilleur));
   return {
     id,
     nom,
     wape: resultat.wape,
-    volume,
+    volumeBrut,
+    volumeAjuste,
     etpMoyen,
     dispo: moyenne(dispos),
     ecart: moyenne(ecarts),
@@ -211,6 +217,7 @@ export default function SyntheseExecutive({
   onSkill,
   holt,
   light,
+  pourcentages,
 }: Props) {
   useEffect(() => {
     if (visible) onSkill(VUE_GLOBALE);
@@ -224,8 +231,8 @@ export default function SyntheseExecutive({
   ];
   const indicateurs = colonnes.map((colonne) => (
     colonne.resultat?.plan.length
-      ? indiquer(colonne.id, colonne.nom, colonne.resultat, planning, etpDispo)
-      : { id: colonne.id, nom: colonne.nom, wape: null, volume: 0, etpMoyen: 0, dispo: null, ecart: null, picEtp: 0, picPeriode: '—', vide: true }
+      ? indiquer(colonne.id, colonne.nom, colonne.resultat, planning, etpDispo, pourcentages)
+      : { id: colonne.id, nom: colonne.nom, wape: null, volumeBrut: 0, volumeAjuste: 0, etpMoyen: 0, dispo: null, ecart: null, picEtp: 0, picPeriode: '—', vide: true }
   ));
   const recommande = choisirRecommande(indicateurs);
   const retenu = indicateurs.find((modele) => modele.id === recommande) ?? null;
@@ -242,7 +249,8 @@ export default function SyntheseExecutive({
   ];
   const versModele = (modele: Indicateur | undefined): ModeleSynthese | null => (modele ? {
     wape: modele.wape,
-    volume: modele.volume,
+    volumeBrut: modele.volumeBrut,
+    volumeAjuste: modele.volumeAjuste,
     etpMoyen: modele.etpMoyen,
     ecart: modele.ecart,
     pic: `${etpTexte(modele.picEtp)} ETP · ${modele.picPeriode}`,
@@ -267,7 +275,8 @@ export default function SyntheseExecutive({
     verdict: retenu ? phraseVerdict(retenu) : 'La précision sur l’historique n’a pas pu être mesurée. Comparez les ETP requis ci-dessus avant de figer le plan.',
   });
   const lignes = [
-    { label: 'Volume total prévu', valeur: (modele: Indicateur) => modele.volume.toLocaleString('fr-FR') },
+    { label: 'Volume brut modèle', valeur: (modele: Indicateur) => modele.volumeBrut.toLocaleString('fr-FR') },
+    { label: 'Volume ajusté manager', valeur: (modele: Indicateur) => modele.volumeAjuste.toLocaleString('fr-FR') },
     { label: 'ETP requis moyen', valeur: (modele: Indicateur) => etpTexte(modele.etpMoyen) },
     { label: 'Écart vs effectif dispo', valeur: (modele: Indicateur) => (modele.ecart == null ? '—' : texteEcart(modele.ecart)), ecart: true },
     { label: 'Pic de besoin maximal', valeur: (modele: Indicateur) => `${etpTexte(modele.picEtp)} ETP · ${modele.picPeriode}` },
@@ -402,12 +411,12 @@ const styles = StyleSheet.create({
   puce: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, minWidth: 120 },
   puceLabel: { color: '#687581', fontSize: 11, fontWeight: '500' },
   puceValeur: { color: '#0F2D46', fontSize: 14, fontWeight: '600', marginTop: 2 },
-  table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden', minWidth: 692 },
+  table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden', minWidth: 724 },
   ligneEntete: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#0F2D46' },
   ligne: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#FFFFFF' },
   ligneAlt: { backgroundColor: '#F8FAFC' },
   cellule: { width: 168, paddingVertical: 10, paddingHorizontal: 10, color: '#0F2D46', fontSize: 13 },
-  celluleLabel: { width: 188, fontWeight: '700' },
+  celluleLabel: { width: 220, fontWeight: '700' },
   celluleValeur: { fontWeight: '700' },
   celluleModele: { width: 168, paddingVertical: 10, paddingHorizontal: 10, gap: 2 },
   colonneRecommandee: { backgroundColor: '#FFF8E1' },

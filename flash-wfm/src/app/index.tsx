@@ -13,6 +13,7 @@ import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
 import { envoyerRetour, TYPES_RETOUR, type TypeRetour } from '../lib/feedback';
 import { historiqueExemple, lignesModele } from '../lib/exempleHistorique';
+import { appliquerAjustements, periodesAjustables, pourcentagePeriode, saisiePourcentageValide } from '../lib/ajustements';
 import {
   SKILL_DEFAUT,
   VUE_GLOBALE,
@@ -172,6 +173,8 @@ function etpDispoMoyenDe(planningVue: boolean, couvertures: LigneCouverture[] | 
   if (!planningVue && etpSaisie != null) return etpSaisie;
   return null;
 }
+
+const AJUSTEMENTS_VIDES: Record<string, string> = {};
 
 const MODES_PREVISION: { id: 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride'; titre: string; sous?: string }[] = [
   { id: 'Auto', titre: 'Auto (Recommandé)' },
@@ -620,10 +623,10 @@ function styleLibelle(alt: boolean): CSSProperties {
   };
 }
 
-function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null): LignePlan[] {
+function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null, volumeAjuste = false): LignePlan[] {
   const lignes: LignePlan[] = [
     {
-      libelle: 'Volume prévu',
+      libelle: volumeAjuste ? 'Volume ajusté' : 'Volume prévu',
       alt: false,
       cellules: plan.map((row, index) => ({ key: `v-${index}`, texte: row.volume_prevu.toLocaleString('fr-FR') })),
     },
@@ -649,8 +652,8 @@ function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null): L
   return lignes;
 }
 
-function TableauPlanWeb({ plan, couvertures }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null }) {
-  const lignes = lignesPlan(plan, couvertures);
+function TableauPlanWeb({ plan, couvertures, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; volumeAjuste: boolean }) {
+  const lignes = lignesPlan(plan, couvertures, volumeAjuste);
   return React.createElement(
     'div',
     { id: 'flash-plan-scroll', style: styleDefilement },
@@ -681,13 +684,50 @@ function TableauPlanWeb({ plan, couvertures }: { plan: PlanLigne[]; couvertures:
   );
 }
 
-function HorizontalPlan({ plan, couvertures }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null }) {
+function GrilleAjustements({ plan, saisies, onSaisie }: { plan: PlanLigne[]; saisies: Record<string, string>; onSaisie: (cle: string, texte: string) => void }) {
+  const periodes = periodesAjustables(plan, saisies);
+  return (
+    <View style={styles.grilleAjust}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <View style={styles.grilleTable}>
+          <View style={styles.grilleEntete}>
+            <Text style={[styles.grilleCellule, styles.grillePeriode, styles.grilleEnteteTexte]}>Période</Text>
+            <Text style={[styles.grilleCellule, styles.grilleNombre, styles.grilleEnteteTexte]}>Volume brut</Text>
+            <Text style={[styles.grilleCellule, styles.grilleSaisie, styles.grilleEnteteTexte]}>Ajustement (%)</Text>
+            <Text style={[styles.grilleCellule, styles.grilleNombre, styles.grilleEnteteTexte]}>Volume ajusté</Text>
+          </View>
+          {periodes.map((periode, index) => (
+            <View key={periode.cle} style={[styles.grilleLigne, index % 2 === 1 && styles.grilleLigneAlt]}>
+              <Text style={[styles.grilleCellule, styles.grillePeriode]}>{periode.libelle}</Text>
+              <Text style={[styles.grilleCellule, styles.grilleNombre]}>{periode.volumeBrut.toLocaleString('fr-FR')}</Text>
+              <View style={[styles.grilleCellule, styles.grilleSaisie]}>
+                <TextInput
+                  style={styles.grilleInput}
+                  value={saisies[periode.cle] ?? ''}
+                  onChangeText={(texte) => {
+                    if (saisiePourcentageValide(texte)) onSaisie(periode.cle, texte.replace(/\s/g, ''));
+                  }}
+                  placeholder="0"
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
+              <Text style={[styles.grilleCellule, styles.grilleNombre, styles.grilleNombreFort]}>{periode.volumeAjuste.toLocaleString('fr-FR')}</Text>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+      <Text style={styles.grilleNote}>Saisissez un pourcentage d'évolution, positif ou négatif. L'ETP requis et les écarts suivent le volume ajusté.</Text>
+    </View>
+  );
+}
+
+function HorizontalPlan({ plan, couvertures, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; volumeAjuste: boolean }) {
   if (plan.length === 0) return null;
   if (Platform.OS === 'web') {
-    return <View style={styles.hTable}>{TableauPlanWeb({ plan, couvertures })}</View>;
+    return <View style={styles.hTable}>{TableauPlanWeb({ plan, couvertures, volumeAjuste })}</View>;
   }
 
-  const lignes = lignesPlan(plan, couvertures);
+  const lignes = lignesPlan(plan, couvertures, volumeAjuste);
   return (
     <View style={styles.hTable}>
       <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.hScroll}>
@@ -714,6 +754,7 @@ function HorizontalPlan({ plan, couvertures }: { plan: PlanLigne[]; couvertures:
 
 type ExportPlan = {
   plan: PlanLigne[];
+  saisies: Record<string, string>;
   aht: number;
   sla: number;
   tempsCible: number;
@@ -728,9 +769,11 @@ type ExportPlan = {
   perimetre: string;
 };
 
-function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation, couvertures, perimetre }: ExportPlan) {
-  const volumeTotal = plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
-  const etpMoyen = plan.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / plan.length;
+function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation, couvertures, perimetre }: ExportPlan) {
+  const planAjuste = appliquerAjustements(plan, saisies);
+  const volumeBrut = plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
+  const volumeAjuste = planAjuste.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
+  const etpMoyen = planAjuste.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / planAjuste.length;
   const fluxFroid = typeFlux === 'froid';
   const libelleDelai = fluxFroid ? 'Délai SLA (jours)' : 'SLA cible (%)';
   const valeurDelai = fluxFroid ? delaiSlaJours : sla;
@@ -754,12 +797,14 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
     ["Heures d'ouverture", heuresOuverture],
     ['Modèle', modele],
     ['Horizon', horizonLabel],
-    ['Volume total', volumeTotal],
+    ['Volume brut modèle', volumeBrut],
+    ['Volume ajusté manager', volumeAjuste],
     ['ETP moyen', Number(etpMoyen.toFixed(2))],
     [],
-    ['Période', 'Volume prévu', 'ETP requis', libelleDelai, ...(avecCouverture ? ['ETP disponible', 'Écart ETP', 'Couverture (%)'] : [])],
+    ['Période', 'Volume brut modèle', 'Ajustement (%)', 'Volume ajusté manager', 'ETP requis', libelleDelai, ...(avecCouverture ? ['ETP disponible', 'Écart ETP', 'Couverture (%)'] : [])],
     ...plan.map((ligne, index) => {
-      const base: (string | number)[] = [ligne.date, ligne.volume_prevu, ligne.etp_moyen_requis, valeurDelai];
+      const ajuste = planAjuste[index] ?? ligne;
+      const base: (string | number)[] = [ligne.date, ligne.volume_prevu, pourcentagePeriode(ligne.date, saisies), ajuste.volume_prevu, ajuste.etp_moyen_requis, valeurDelai];
       if (!couvertures) return base;
       const couverture = couvertures[index];
       base.push(
@@ -770,8 +815,8 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
       return base;
     }),
   ];
-  const enteteTableau = 14;
-  const nbColonnes = avecCouverture ? 7 : 4;
+  const enteteTableau = lignes.findIndex((ligne) => ligne[0] === 'Période');
+  const nbColonnes = avecCouverture ? 9 : 6;
   const feuille = XLSXStyle.utils.aoa_to_sheet(lignes);
   feuille['!merges'] = [
     { s: { r: 0, c: 0 }, e: { r: 0, c: nbColonnes - 1 } },
@@ -779,8 +824,10 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
   ];
   feuille['!cols'] = [
     { wch: 32 },
-    { wch: 18 },
+    { wch: 22 },
     { wch: 16 },
+    { wch: 24 },
+    { wch: 14 },
     { wch: 18 },
     ...(avecCouverture ? [{ wch: 18 }, { wch: 14 }, { wch: 16 }] : []),
   ];
@@ -788,7 +835,7 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
   feuille['!autofilter'] = {
     ref: XLSXStyle.utils.encode_range({ s: { r: enteteTableau, c: 0 }, e: { r: lignes.length - 1, c: nbColonnes - 1 } }),
   };
-  feuille['!views'] = [{ state: 'frozen', ySplit: enteteTableau + 1, xSplit: 0, topLeftCell: 'A16', activePane: 'bottomLeft' }];
+  feuille['!views'] = [{ state: 'frozen', ySplit: enteteTableau + 1, xSplit: 0, topLeftCell: `A${enteteTableau + 2}`, activePane: 'bottomLeft' }];
 
   const fin = { style: 'thin', color: { rgb: 'E6E9EE' } };
   const bordure = { top: fin, bottom: fin, left: fin, right: fin };
@@ -822,10 +869,11 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
   poser('A2', styleSousTitre);
   poser('A4', styleEntete);
   poser('B4', styleEntete);
-  for (let ligne = 5; ligne <= 13; ligne += 1) {
+  for (let ligne = 5; ligne <= enteteTableau - 1; ligne += 1) {
+    const libelle = String(lignes[ligne - 1]?.[0] ?? '');
     const fond = ligne % 2 === 0 ? { patternType: 'solid', fgColor: { rgb: 'F7F6F1' } } : undefined;
     poser(`A${ligne}`, { ...styleLibelle, fill: fond });
-    const format = ligne === 12 ? '#,##0' : ligne === 13 ? '0.00' : ligne === 9 ? '0.0' : ligne <= 8 ? '0' : undefined;
+    const format = libelle.startsWith('Volume') ? '#,##0' : libelle.startsWith('ETP') ? '0.00' : libelle.startsWith('Heures') ? '0.0' : /AHT|SLA|Délai|Occupation|Shrinkage|Temps/.test(libelle) ? '0' : undefined;
     poser(`B${ligne}`, { ...styleValeur, fill: fond }, format);
   }
   for (let colonne = 0; colonne < nbColonnes; colonne += 1) {
@@ -837,12 +885,14 @@ function exporterPlanExcel({ plan, aht, sla, tempsCible, shrinkage, heuresOuvert
     const styleNombre = { ...styleTexte, alignment: { horizontal: 'right', vertical: 'center' } };
     poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 0 }), styleTexte);
     poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 1 }), styleNombre, '#,##0');
-    poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 2 }), styleNombre, '#,##0');
-    poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 3 }), styleNombre, '0');
+    poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 2 }), styleNombre, '0.0');
+    poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 3 }), styleNombre, '#,##0');
+    poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 4 }), styleNombre, '0.0');
+    poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 5 }), styleNombre, '0');
     if (avecCouverture) {
-      poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 4 }), styleNombre, '0.00');
-      poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 5 }), styleNombre, '0.00');
-      poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 6 }), styleNombre, '0.0');
+      poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 6 }), styleNombre, '0.00');
+      poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 7 }), styleNombre, '0.00');
+      poser(XLSXStyle.utils.encode_cell({ r: ligne, c: 8 }), styleNombre, '0.0');
     }
   }
 
@@ -1107,6 +1157,8 @@ export default function FlashWFM() {
   const [remplissage, setRemplissage] = useState({ sla: '80', delai: '20', occupation: '85' });
   const [etpMoyens, setEtpMoyens] = useState('');
   const [etpMoyensAppliques, setEtpMoyensAppliques] = useState<number | null>(null);
+  const [ajustementsOuverts, setAjustementsOuverts] = useState(false);
+  const [ajustementsSaisis, setAjustementsSaisis] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const { userId, isPro, abonnementActif, assurerDroits } = useAuth();
   const [, setModalePro] = useState(false);
@@ -1139,6 +1191,11 @@ export default function FlashWFM() {
     () => planDuSkill(skillCourant, plansParSkill, plans, horizon),
     [skillCourant, plansParSkill, plans, horizon],
   );
+  const saisiesAjustement = ajustementsOuverts ? ajustementsSaisis : AJUSTEMENTS_VIDES;
+  const planAjuste = useMemo(
+    () => (plan ? appliquerAjustements(plan, saisiesAjustement) : null),
+    [plan, saisiesAjustement],
+  );
   const planningActif = isPro && etpStatut === 'valide' && !!etpPlanning?.length;
   const dmtFichier = useMemo(() => dmtPondere(series), [series]);
   const etpSaisieVue = useMemo(
@@ -1147,11 +1204,11 @@ export default function FlashWFM() {
   );
   const planningVue = planningActif && (!multi || skillCourant === VUE_GLOBALE);
   const couvertures = useMemo(() => {
-    if (!plan) return null;
-    if (planningVue) return couverturesDuPlan(plan, etpPlanning, null);
+    if (!planAjuste) return null;
+    if (planningVue) return couverturesDuPlan(planAjuste, etpPlanning, null);
     if (!isPro) return null;
-    return couverturesDuPlan(plan, null, etpSaisieVue);
-  }, [plan, planningVue, etpPlanning, isPro, etpSaisieVue]);
+    return couverturesDuPlan(planAjuste, null, etpSaisieVue);
+  }, [planAjuste, planningVue, etpPlanning, isPro, etpSaisieVue]);
   const periodesSansEtp = !!couvertures && planningVue && couvertures.some((ligne) => ligne.etpDispo == null);
   const socleCibles = useMemo(() => ({
     aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures,
@@ -1976,9 +2033,10 @@ export default function FlashWFM() {
       setModalePro(true);
       return;
     }
-    if (!plan) return;
+    if (!plan || !planAjuste) return;
     exporterPlanExcel({
       plan,
+      saisies: saisiesAjustement,
       aht: parseInt(ciblesVue.dmt, 10) || 360,
       sla: parseFloat(ciblesVue.sla) || 80,
       tempsCible: parseInt(ciblesVue.delaiCible, 10) || 20,
@@ -2040,8 +2098,8 @@ export default function FlashWFM() {
     void handleGenerate();
   };
 
-  const volumeTotal = plan?.reduce((somme, ligne) => somme + ligne.volume_prevu, 0) ?? 0;
-  const etpMoyenRequis = plan && plan.length ? plan.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / plan.length : 0;
+  const volumeTotal = planAjuste?.reduce((somme, ligne) => somme + ligne.volume_prevu, 0) ?? 0;
+  const etpMoyenRequis = planAjuste && planAjuste.length ? planAjuste.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / planAjuste.length : 0;
   const couvertureMoyenne = couvertures
     ? moyenne(couvertures.map((ligne) => ligne.couverture).filter((valeur): valeur is number => valeur != null))
     : null;
@@ -2293,7 +2351,7 @@ export default function FlashWFM() {
                 <View style={styles.resultat}>
                   <View style={styles.statsRow}>
                     <View style={styles.statCard}>
-                      <Text style={styles.statLabel}>Volume prévu</Text>
+                      <Text style={styles.statLabel}>{ajustementsOuverts ? 'Volume ajusté' : 'Volume prévu'}</Text>
                       <Text style={styles.statValue}>{volumeTotal.toLocaleString('fr-FR')}</Text>
                     </View>
                     <View style={styles.statCard}>
@@ -2312,10 +2370,14 @@ export default function FlashWFM() {
                       <Text style={[styles.statValue, { color: couleurCouverture(couvertureMoyenne) }]}>{couvertureMoyenne != null ? texteCouverture(couvertureMoyenne) : '—'}</Text>
                     </View>
                   </View>
-                  <CombinedChart points={plan.map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
+                  <CombinedChart points={(planAjuste ?? plan).map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
                   <View style={styles.planHeader}>
                     <Text style={styles.planHeaderTitle}>Plan de production</Text>
                     <View style={styles.planActions}>
+                      <TouchableOpacity style={[styles.ajustToggle, ajustementsOuverts && styles.ajustToggleOn]} onPress={() => setAjustementsOuverts((ouvert) => !ouvert)}>
+                        <Ionicons name="options-outline" size={16} color={ajustementsOuverts ? '#F8FAFC' : '#0F2D46'} />
+                        <Text style={[styles.ajustToggleTexte, ajustementsOuverts && styles.ajustToggleTexteOn]}>Ajustements événementiels (% métier)</Text>
+                      </TouchableOpacity>
                       <TouchableOpacity style={styles.syntheseBtn} onPress={() => { void ouvrirSynthese(); }}>
                         <Ionicons name="bar-chart-outline" size={16} color="#F4C430" />
                         <Text style={styles.syntheseBtnText}>Synthèse & Comparatif</Text>
@@ -2328,7 +2390,14 @@ export default function FlashWFM() {
                   {planningVue ? <Text style={styles.hint}>Écart et couverture calculés à partir du planning ETP importé.</Text> : null}
                   {multi && planningActif && skillCourant !== VUE_GLOBALE ? <Text style={styles.hint}>Cette file utilise l'ETP saisi ci-dessus. La vue globale conserve le planning jour par jour.</Text> : null}
                   {periodesSansEtp ? <Text style={styles.hint}>Certaines périodes du plan n’ont pas de correspondance dans le fichier ETP.</Text> : null}
-                  <HorizontalPlan plan={plan} couvertures={couvertures} />
+                  {ajustementsOuverts ? (
+                    <GrilleAjustements
+                      plan={plan}
+                      saisies={ajustementsSaisis}
+                      onSaisie={(cle, texte) => setAjustementsSaisis((actuel) => ({ ...actuel, [cle]: texte }))}
+                    />
+                  ) : null}
+                  <HorizontalPlan plan={planAjuste ?? plan} couvertures={couvertures} volumeAjuste={ajustementsOuverts} />
 
                   {!planningActif && !multi ? (
                     <View style={styles.ajustBloc}>
@@ -2392,6 +2461,7 @@ export default function FlashWFM() {
         onSkill={setSkillSynthese}
         holt={cadreSynthese.holt}
         light={cadreSynthese.light}
+        pourcentages={saisiesAjustement}
       />
       <ModaleFeedback
         visible={feedbackOuvert}
@@ -2540,6 +2610,23 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   planHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 16, marginBottom: 12, gap: 12 },
   planHeaderTitle: { fontSize: 18, color: '#0F2D46', fontWeight: '700' },
+  ajustToggle: { alignSelf: 'flex-start', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: '#F4C430', backgroundColor: '#FFF8E1', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  ajustToggleOn: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
+  ajustToggleTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  ajustToggleTexteOn: { color: '#F8FAFC' },
+  grilleAjust: { marginTop: 12, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, backgroundColor: '#FFFFFF', overflow: 'hidden' },
+  grilleTable: { minWidth: 640 },
+  grilleEntete: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0F2D46' },
+  grilleLigne: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E2E8F0' },
+  grilleLigneAlt: { backgroundColor: '#F8FAFC' },
+  grilleCellule: { paddingVertical: 8, paddingHorizontal: 12, justifyContent: 'center' },
+  grillePeriode: { width: 220, color: '#1E293B', fontSize: 14 },
+  grilleNombre: { width: 140, color: '#1E293B', fontSize: 14, textAlign: 'right' },
+  grilleNombreFort: { fontWeight: '600', color: '#0F2D46' },
+  grilleSaisie: { width: 140, alignItems: 'flex-end' },
+  grilleEnteteTexte: { color: '#F8FAFC', fontSize: 13, fontWeight: '600' },
+  grilleInput: { width: 96, minHeight: 40, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 12, color: '#1E293B', fontSize: 14, backgroundColor: '#FFFFFF', textAlign: 'center' },
+  grilleNote: { color: '#687581', fontSize: 13, lineHeight: 18, paddingHorizontal: 12, paddingVertical: 10 },
   planActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' },
   syntheseBtn: { backgroundColor: '#0F2D46', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
   syntheseBtnText: { color: '#F4C430', fontWeight: '600', fontSize: 14 },

@@ -8,7 +8,8 @@ export type Hypothese = {
 
 export type ModeleSynthese = {
   wape: number | null;
-  volume: number;
+  volumeBrut: number;
+  volumeAjuste: number;
   etpMoyen: number;
   ecart: number | null;
   pic: string;
@@ -55,7 +56,7 @@ function texteRecommande(dossier: DossierSynthese) {
   return `${retenu.nom} — ${texteWape(retenu.donnees?.wape ?? null)}`;
 }
 
-function valeurModele(modele: ModeleSynthese | null, champ: 'volume' | 'etpMoyen' | 'ecart') {
+function valeurModele(modele: ModeleSynthese | null, champ: 'volumeBrut' | 'volumeAjuste' | 'etpMoyen' | 'ecart') {
   if (!modele || modele[champ] == null) return '—';
   return modele[champ] as number;
 }
@@ -115,7 +116,8 @@ export function classeurSynthese(dossier: DossierSynthese) {
     ligneComplete([], largeurLigne),
     ligneComplete(['Comparatif des modèles'], largeurLigne),
     ['Indicateur', ...modeles.map((modele) => nomModele(modele.nom, dossier.recommande === modele.id))],
-    ['Volume total prévu', ...modeles.map((modele) => valeurModele(modele.donnees, 'volume'))],
+    ['Volume brut modèle', ...modeles.map((modele) => valeurModele(modele.donnees, 'volumeBrut'))],
+    ['Volume ajusté manager', ...modeles.map((modele) => valeurModele(modele.donnees, 'volumeAjuste'))],
     ['ETP requis moyen', ...modeles.map((modele) => valeurModele(modele.donnees, 'etpMoyen'))],
     ['Écart vs effectif dispo', ...modeles.map((modele) => valeurModele(modele.donnees, 'ecart'))],
     ['Pic de besoin maximal', ...modeles.map((modele) => modele.donnees?.pic ?? '—')],
@@ -129,9 +131,10 @@ export function classeurSynthese(dossier: DossierSynthese) {
   const finHypotheses = debutHypotheses + hypotheses.length - 1;
   const enteteComparatif = finHypotheses + 3;
   const ligneVolume = enteteComparatif + 1;
-  const ligneEtp = enteteComparatif + 2;
-  const ligneEcart = enteteComparatif + 3;
-  const lignePic = enteteComparatif + 4;
+  const ligneVolumeAjuste = enteteComparatif + 2;
+  const ligneEtp = enteteComparatif + 3;
+  const ligneEcart = enteteComparatif + 4;
+  const lignePic = enteteComparatif + 5;
   const ligneReco = lignePic + 3;
   const lignePhrase = ligneReco + 1;
 
@@ -147,7 +150,7 @@ export function classeurSynthese(dossier: DossierSynthese) {
     { s: { r: lignePhrase, c: 0 }, e: { r: lignePhrase, c: derniere } },
   ];
   feuille['!cols'] = [
-    largeur(hypotheses.map((ligne) => ligne.label).concat(['Écart vs effectif dispo', 'Pic de besoin maximal', 'Modèle recommandé']), 24, 36),
+    largeur(hypotheses.map((ligne) => ligne.label).concat(['Volume ajusté manager', 'Écart vs effectif dispo', 'Pic de besoin maximal', 'Modèle recommandé']), 24, 36),
     ...modeles.map((modele) => largeur([modele.nom, 'Recommandé (Auto)', texteRecommande(dossier)], 24, 36)),
   ];
   const hauteurs: { hpt: number }[] = [];
@@ -221,6 +224,7 @@ export function classeurSynthese(dossier: DossierSynthese) {
     });
   };
   poserComparatif(ligneVolume, '#,##0');
+  poserComparatif(ligneVolumeAjuste, '#,##0');
   poserComparatif(ligneEtp, '#,##0.0');
   poserComparatif(ligneEcart, '#,##0.0', true);
   poserComparatif(lignePic);
@@ -297,7 +301,7 @@ export async function exporterSynthesePptx(dossier: DossierSynthese) {
     border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle', rowH: 0.22,
   });
 
-  const colonne = (modele: ModeleSynthese | null, recommande: boolean, champ: 'volume' | 'etpMoyen' | 'ecart' | 'pic') => {
+  const colonne = (modele: ModeleSynthese | null, recommande: boolean, champ: 'volumeBrut' | 'volumeAjuste' | 'etpMoyen' | 'ecart' | 'pic') => {
     if (!modele) return cellulePpt('—', { fill: recommande ? 'FFF8E1' : 'FFFFFF' });
     if (champ === 'pic') return cellulePpt(modele.pic, { fill: recommande ? 'FFF8E1' : 'FFFFFF' });
     const brut = modele[champ];
@@ -312,7 +316,7 @@ export async function exporterSynthesePptx(dossier: DossierSynthese) {
         align: 'right',
       });
     }
-    return cellulePpt(texteNombre(brut, champ === 'volume' ? 0 : 1), {
+    return cellulePpt(texteNombre(brut, champ === 'volumeBrut' || champ === 'volumeAjuste' ? 0 : 1), {
       fill: recommande ? 'FFF8E1' : 'FFFFFF',
       align: 'right',
       bold: true,
@@ -323,23 +327,24 @@ export async function exporterSynthesePptx(dossier: DossierSynthese) {
       cellulePpt('Indicateur', entete),
       ...dossier.modeles.map((modele) => cellulePpt(nomModele(modele.nom, dossier.recommande === modele.id), entete)),
     ],
-    [cellulePpt('Volume total prévu', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'volume'))],
+    [cellulePpt('Volume brut modèle', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'volumeBrut'))],
+    [cellulePpt('Volume ajusté manager', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'volumeAjuste'))],
     [cellulePpt('ETP requis moyen', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'etpMoyen'))],
     [cellulePpt('Écart vs effectif dispo', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'ecart'))],
     [cellulePpt('Pic de besoin maximal', { bold: true }), ...dossier.modeles.map((modele) => colonne(modele.donnees, dossier.recommande === modele.id, 'pic'))],
   ];
-  slide.addText('Comparatif des modèles', { x: 0.35, y: 3.55, w: 12.6, h: 0.24, fontFace: 'Calibri', fontSize: 14, bold: true, color: '0F2D46', margin: 0 });
+  slide.addText('Comparatif des modèles', { x: 0.35, y: 3.42, w: 12.6, h: 0.24, fontFace: 'Calibri', fontSize: 14, bold: true, color: '0F2D46', margin: 0 });
   slide.addTable(comp, {
-    x: 0.35, y: 3.82, w: 12.6, colW: [2.4, ...dossier.modeles.map(() => (12.6 - 2.4) / Math.max(dossier.modeles.length, 1))], fontFace: 'Calibri', fontSize: 10,
-    border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle', rowH: [0.46, 0.26, 0.26, 0.26, 0.34],
+    x: 0.35, y: 3.72, w: 12.6, colW: [2.4, ...dossier.modeles.map(() => (12.6 - 2.4) / Math.max(dossier.modeles.length, 1))], fontFace: 'Calibri', fontSize: 10,
+    border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle', rowH: [0.4, 0.22, 0.22, 0.22, 0.22, 0.28],
   });
 
   slide.addShape(pptx.ShapeType.rect, {
-    x: 0.35, y: 5.55, w: 12.63, h: 1.7, fill: { color: 'F8FAFC' }, line: { color: '0F2D46', width: 1.25 },
+    x: 0.35, y: 5.4, w: 12.63, h: 1.85, fill: { color: 'F8FAFC' }, line: { color: '0F2D46', width: 1.25 },
   });
-  slide.addText('Verdict', { x: 0.55, y: 5.65, w: 12, h: 0.24, fontFace: 'Calibri', fontSize: 13, bold: true, color: '0F2D46', margin: 0 });
+  slide.addText('Verdict', { x: 0.55, y: 5.5, w: 12, h: 0.24, fontFace: 'Calibri', fontSize: 13, bold: true, color: '0F2D46', margin: 0 });
   slide.addText(`${texteRecommande(dossier)}\n${dossier.verdict}`, {
-    x: 0.55, y: 5.92, w: 12.2, h: 1.2, fontFace: 'Calibri', fontSize: 13, color: '0F2D46', margin: 0,
+    x: 0.55, y: 5.78, w: 12.2, h: 1.35, fontFace: 'Calibri', fontSize: 13, color: '0F2D46', margin: 0,
   });
 
   await pptx.writeFile({ fileName: `${FICHIER}.pptx` });
