@@ -14,7 +14,7 @@ export type ModeleSynthese = {
   pic: string;
 };
 
-export type IdSynthese = 'auto' | 'ia' | 'saison' | 'hybride';
+export type IdSynthese = 'ia' | 'saison' | 'hybride';
 
 export type ColonneSynthese = {
   id: IdSynthese;
@@ -41,7 +41,7 @@ function dateDuJour() {
 }
 
 function nomModele(nom: string, recommande: boolean) {
-  return recommande ? `${nom}\nRecommandé` : nom;
+  return recommande ? `${nom}\nRecommandé (Auto)` : nom;
 }
 
 function texteWape(wape: number | null) {
@@ -148,7 +148,7 @@ export function classeurSynthese(dossier: DossierSynthese) {
   ];
   feuille['!cols'] = [
     largeur(hypotheses.map((ligne) => ligne.label).concat(['Écart vs effectif dispo', 'Pic de besoin maximal', 'Modèle recommandé']), 24, 36),
-    ...modeles.map((modele) => largeur([modele.nom, 'Recommandé', texteRecommande(dossier)], 24, 36)),
+    ...modeles.map((modele) => largeur([modele.nom, 'Recommandé (Auto)', texteRecommande(dossier)], 24, 36)),
   ];
   const hauteurs: { hpt: number }[] = [];
   hauteurs[0] = { hpt: 30 };
@@ -330,7 +330,7 @@ export async function exporterSynthesePptx(dossier: DossierSynthese) {
   ];
   slide.addText('Comparatif des modèles', { x: 0.35, y: 3.55, w: 12.6, h: 0.24, fontFace: 'Calibri', fontSize: 14, bold: true, color: '0F2D46', margin: 0 });
   slide.addTable(comp, {
-    x: 0.35, y: 3.82, w: 12.6, colW: [2.2, 2.6, 2.6, 2.6, 2.6], fontFace: 'Calibri', fontSize: 10,
+    x: 0.35, y: 3.82, w: 12.6, colW: [2.4, ...dossier.modeles.map(() => (12.6 - 2.4) / Math.max(dossier.modeles.length, 1))], fontFace: 'Calibri', fontSize: 10,
     border: { pt: 0.5, color: 'E2E8F0' }, valign: 'middle', rowH: [0.46, 0.26, 0.26, 0.26, 0.34],
   });
 

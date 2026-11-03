@@ -66,15 +66,6 @@ function poidsConsensus(wapeHolt: number | null, wapeLight: number | null) {
   return [holt / somme, light / somme];
 }
 
-function retenirAuto(holt: ResultatModele | null, light: ResultatModele | null): ResultatModele | null {
-  if (!holt?.plan.length) return light?.plan.length ? light : null;
-  if (!light?.plan.length) return holt;
-  if (holt.wape == null && light.wape == null) return holt;
-  if (holt.wape == null) return light;
-  if (light.wape == null) return holt;
-  return light.wape < holt.wape ? light : holt;
-}
-
 function fusionnerPlans(holt: PlanLigne[], light: PlanLigne[], poidsHolt: number, poidsLight: number): PlanLigne[] {
   const holtParDate = new Map(holt.map((ligne) => [ligne.date, ligne]));
   const lightParDate = new Map(light.map((ligne) => [ligne.date, ligne]));
@@ -134,33 +125,37 @@ function indiquer(id: IdSynthese, nom: string, resultat: ResultatModele, plannin
   };
 }
 
-const PRIORITE: Record<IdSynthese, number> = { auto: 0, ia: 1, saison: 2, hybride: 3 };
+const PRIORITE: Record<IdSynthese, number> = { saison: 0, ia: 1, hybride: 2 };
 
 function choisirRecommande(indicateurs: Indicateur[]): IdSynthese | null {
   const notes = indicateurs.filter((modele) => !modele.vide && modele.wape != null);
-  if (notes.length) {
-    notes.sort((a, b) => (a.wape ?? 0) - (b.wape ?? 0) || PRIORITE[a.id] - PRIORITE[b.id]);
-    return notes[0].id;
-  }
-  return indicateurs.find((modele) => !modele.vide)?.id ?? null;
+  if (!notes.length) return null;
+  notes.sort((a, b) => (a.wape ?? 0) - (b.wape ?? 0) || PRIORITE[a.id] - PRIORITE[b.id]);
+  return notes[0].id;
+}
+
+function libelleRetenu(nom: string) {
+  if (nom.startsWith('IA')) return `l'${nom}`;
+  if (nom.startsWith('Modèle')) return `le ${nom}`;
+  return nom;
 }
 
 function phraseVerdict(modele: Indicateur) {
-  const nom = modele.nom;
+  const ouverture = `Le modèle recommandé Auto retient ${libelleRetenu(modele.nom)}`;
   const recommande = etpTexte(modele.etpMoyen);
   if (modele.dispo == null || modele.ecart == null) {
-    return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Renseignez votre effectif disponible pour estimer l'écart.`;
+    return `${ouverture}. Il préconise un besoin moyen de ${recommande} ETP sur la période. Renseignez votre effectif disponible pour estimer l'écart.`;
   }
   const dispo = etpTexte(modele.dispo);
   const ecartArrondi = Math.round(modele.ecart * 10) / 10;
   const ecart = etpTexte(Math.abs(ecartArrondi));
   if (ecartArrondi < 0) {
-    return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Avec votre effectif actuel (${dispo} ETP), il vous manque ${ecart} ETP pour pouvoir respecter votre objectif de service.`;
+    return `${ouverture}. Il préconise un besoin moyen de ${recommande} ETP sur la période. Avec votre effectif actuel (${dispo} ETP), il vous manque ${ecart} ETP pour pouvoir respecter votre objectif de service.`;
   }
   if (ecartArrondi > 0) {
-    return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Votre effectif actuel (${dispo} ETP) présente un surplus de ${ecart} ETP par rapport à votre objectif de service.`;
+    return `${ouverture}. Il préconise un besoin moyen de ${recommande} ETP sur la période. Votre effectif actuel (${dispo} ETP) présente un surplus de ${ecart} ETP par rapport à votre objectif de service.`;
   }
-  return `${nom} préconise un besoin moyen de ${recommande} ETP sur la période. Votre effectif actuel (${dispo} ETP) est parfaitement dimensionné pour respecter votre objectif de service.`;
+  return `${ouverture}. Il préconise un besoin moyen de ${recommande} ETP sur la période. Votre effectif actuel (${dispo} ETP) est parfaitement dimensionné pour respecter votre objectif de service.`;
 }
 
 function texteEcart(valeur: number) {
@@ -218,7 +213,6 @@ export default function SyntheseExecutive({
   const saison = holt?.plan.length ? holt : null;
   const ia = light?.plan.length ? light : null;
   const colonnes: { id: IdSynthese; nom: string; resultat: ResultatModele | null }[] = [
-    { id: 'auto', nom: 'Auto (Recommandé)', resultat: retenirAuto(saison, ia) },
     { id: 'ia', nom: 'IA & Machine Learning', resultat: ia },
     { id: 'saison', nom: 'Saisonnalité & Tendances', resultat: saison },
     { id: 'hybride', nom: 'Modèle Hybride (Consensus)', resultat: resultatHybride(saison, ia) },
@@ -301,7 +295,7 @@ export default function SyntheseExecutive({
           {chargement ? (
             <View style={styles.attente}>
               <ActivityIndicator color="#0F2D46" />
-              <Text style={styles.attenteTexte}>Comparaison des quatre modèles sur votre historique…</Text>
+              <Text style={styles.attenteTexte}>Comparaison des trois modèles sur votre historique…</Text>
             </View>
           ) : (
             <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContenu}>
@@ -328,18 +322,21 @@ export default function SyntheseExecutive({
                     <View style={styles.table}>
                       <View style={styles.ligneEntete}>
                         <Text style={[styles.cellule, styles.celluleLabel, styles.enteteTexte]}>Indicateur</Text>
-                        {indicateurs.map((modele) => (
-                          <View key={modele.id} style={[styles.celluleModele, modele.id === recommande && styles.enteteRecommande]}>
-                            <Text style={styles.modeleNom}>{modele.nom}</Text>
-                            <Text style={styles.modeleWape}>{modele.vide || modele.wape == null ? 'WAPE indisponible' : `WAPE ${nombreFR(modele.wape, 1)} %`}</Text>
-                            {modele.id === recommande ? (
-                              <View style={styles.badge}>
-                                <Ionicons name="star" size={11} color="#0F2D46" />
-                                <Text style={styles.badgeTexte}>Recommandé</Text>
-                              </View>
-                            ) : null}
-                          </View>
-                        ))}
+                        {indicateurs.map((modele) => {
+                          const retenuAuto = modele.id === recommande;
+                          return (
+                            <View key={modele.id} style={[styles.celluleModele, retenuAuto && styles.enteteRecommande]}>
+                              <Text style={[styles.modeleNom, retenuAuto && styles.modeleNomRecommande]}>{modele.nom}</Text>
+                              <Text style={[styles.modeleWape, retenuAuto && styles.modeleWapeRecommande]}>{modele.vide || modele.wape == null ? 'WAPE indisponible' : `WAPE ${nombreFR(modele.wape, 1)} %`}</Text>
+                              {retenuAuto ? (
+                                <View style={styles.badge}>
+                                  <Ionicons name="star" size={11} color="#0F2D46" />
+                                  <Text style={styles.badgeTexte}>Recommandé (Auto)</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          );
+                        })}
                       </View>
                       {lignes.map((ligne, index) => (
                         <View key={ligne.label} style={[styles.ligne, index % 2 === 1 && styles.ligneAlt]}>
@@ -358,7 +355,7 @@ export default function SyntheseExecutive({
                     </View>
                   </ScrollView>
                 )}
-                <Text style={styles.note}>Le badge retient le plus faible WAPE mesuré sur la fin de l’historique.</Text>
+                <Text style={styles.note}>Le badge Recommandé (Auto) désigne la colonne au plus faible WAPE mesuré sur la fin de l’historique.</Text>
               </View>
 
               <View style={[styles.bloc, styles.verdict]}>
@@ -400,7 +397,7 @@ const styles = StyleSheet.create({
   puce: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10, minWidth: 120 },
   puceLabel: { color: '#687581', fontSize: 11, fontWeight: '500' },
   puceValeur: { color: '#0F2D46', fontSize: 14, fontWeight: '600', marginTop: 2 },
-  table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden', minWidth: 980 },
+  table: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, overflow: 'hidden', minWidth: 692 },
   ligneEntete: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#0F2D46' },
   ligne: { flexDirection: 'row', alignItems: 'stretch', backgroundColor: '#FFFFFF' },
   ligneAlt: { backgroundColor: '#F8FAFC' },
@@ -409,10 +406,12 @@ const styles = StyleSheet.create({
   celluleValeur: { fontWeight: '700' },
   celluleModele: { width: 168, paddingVertical: 10, paddingHorizontal: 10, gap: 2 },
   colonneRecommandee: { backgroundColor: '#FFF8E1' },
-  enteteRecommande: { borderBottomWidth: 3, borderBottomColor: '#F4C430' },
+  enteteRecommande: { backgroundColor: '#FFF8E1', borderBottomWidth: 3, borderBottomColor: '#F4C430' },
   enteteTexte: { color: '#F8FAFC', fontWeight: '700' },
   modeleNom: { color: '#FFFFFF', fontSize: 12, fontWeight: '600', lineHeight: 16 },
+  modeleNomRecommande: { color: '#0F2D46' },
   modeleWape: { color: '#E2E8F0', fontSize: 11 },
+  modeleWapeRecommande: { color: '#0F2D46' },
   badge: { alignSelf: 'flex-start', marginTop: 4, backgroundColor: '#F4C430', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, flexDirection: 'row', alignItems: 'center', gap: 4 },
   badgeTexte: { color: '#0F2D46', fontSize: 11, fontWeight: '600' },
   note: { color: '#687581', fontSize: 12, lineHeight: 16 },
