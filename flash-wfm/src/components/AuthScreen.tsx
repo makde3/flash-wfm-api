@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
+import PiedLegal from './PiedLegal';
 import { LienReinitialisation } from '../lib/session';
 import { supabase } from '../lib/supabase';
 
@@ -100,13 +101,14 @@ export default function AuthScreen({ emailConfirme = false, erreurConfirmation =
       </View>
       </View>
       <LienReinitialisation />
+      <PiedLegal />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#E6E9EE', padding: 16 },
-  corps: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  corps: { flex: 1, minHeight: 0, alignItems: 'center', justifyContent: 'center' },
   card: { backgroundColor: '#FFFFFF', width: '100%', maxWidth: 420, borderRadius: 8, padding: 24, borderWidth: 1, borderColor: '#E2E8F0', shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   title: { fontSize: 28, fontWeight: '700', color: '#0F2D46', letterSpacing: 0, textAlign: 'center' },
   titleAccent: { color: '#F4C430', fontWeight: '300' },

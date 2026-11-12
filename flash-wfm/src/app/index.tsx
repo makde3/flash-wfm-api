@@ -12,6 +12,8 @@ import { LienReinitialisation } from '../lib/session';
 import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
 import { envoyerRetour, TYPES_RETOUR, type TypeRetour } from '../lib/feedback';
+import { envoyerDemandePro, lienStripePro } from '../lib/proRequest';
+import PiedLegal from '../components/PiedLegal';
 import { historiqueExemple, lignesModele } from '../lib/exempleHistorique';
 import { appliquerAjustements, periodesAjustables, pourcentagePeriode, saisiePourcentageValide } from '../lib/ajustements';
 import {
@@ -380,20 +382,130 @@ function ModaleFeedback({
   );
 }
 
-function ModalePro({ visible, enCours, onFermer, onPasser }: { visible: boolean; enCours: boolean; onFermer: () => void; onPasser: () => void }) {
+const AVANTAGES_PRO = [
+  { titre: 'Planning ETP réels', detail: 'Comparez le besoin calculé aux effectifs réellement présents, jour par jour.' },
+  { titre: 'Exports Excel & PowerPoint', detail: 'Emportez le plan de production et la synthèse exécutive pour les revues d’équipe.' },
+  { titre: 'Ajustements événementiels métier', detail: 'Intégrez soldes, campagnes ou incidents dans la prévision de volumes.' },
+];
+
+function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
+  const lienStripe = lienStripePro();
+  const [email, setEmail] = useState('');
+  const [entreprise, setEntreprise] = useState('');
+  const [envoi, setEnvoi] = useState(false);
+  const [erreur, setErreur] = useState('');
+  const [confirme, setConfirme] = useState(false);
+  const [paiementOuvert, setPaiementOuvert] = useState(false);
+
+  useEffect(() => {
+    if (!visible) {
+      setErreur('');
+      setConfirme(false);
+      setEnvoi(false);
+      setPaiementOuvert(false);
+      return;
+    }
+    let actif = true;
+    void supabase.auth.getUser().then(({ data }) => {
+      if (!actif) return;
+      const adresse = data.user?.email ?? '';
+      setEmail((actuel) => actuel || adresse);
+    });
+    return () => {
+      actif = false;
+    };
+  }, [visible]);
+
+  const activer = () => {
+    if (lienStripe) {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        const onglet = window.open(lienStripe, '_blank', 'noopener,noreferrer');
+        if (!onglet) {
+          setErreur('Le navigateur a bloqué le nouvel onglet. Autorisez les pop-ups pour ouvrir le paiement.');
+          setPaiementOuvert(false);
+          return;
+        }
+      } else {
+        void Linking.openURL(lienStripe);
+      }
+      setErreur('');
+      setPaiementOuvert(true);
+      return;
+    }
+    if (envoi || confirme) return;
+    setEnvoi(true);
+    setErreur('');
+    void envoyerDemandePro(email, entreprise)
+      .then(() => setConfirme(true))
+      .catch((error: unknown) => {
+        setErreur(error instanceof Error ? error.message : "Impossible d'enregistrer la demande. Réessayez dans un instant.");
+      })
+      .finally(() => setEnvoi(false));
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={() => { if (!envoi) onFermer(); }}>
       <View style={styles.voile}>
         <View style={styles.modale}>
-          <Ionicons name="lock-closed" size={28} color="#0F2D46" />
-          <Text style={styles.modaleTitre}>Offre Pro</Text>
-          <Text style={styles.modaleLead}>Le planning ETP jour par jour, les exports Excel et PowerPoint, et les ajustements événementiels sont réservés à l'offre Pro.</Text>
-          <TouchableOpacity style={[styles.uploadBtn, enCours && styles.generateBtnDisabled]} onPress={onPasser} disabled={enCours}>
-            {enCours ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.uploadBtnText}>Passer en Pro</Text>}
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.modaleFermer} onPress={onFermer} disabled={enCours}>
-            <Text style={styles.resetText}>Fermer</Text>
-          </TouchableOpacity>
+          <ScrollView style={styles.modaleScroll} contentContainerStyle={styles.modaleScrollContenu} keyboardShouldPersistTaps="handled">
+            <Text style={styles.modaleTitre}>Passer en Pro</Text>
+            <Text style={styles.modaleLead}>Flash WFM Pro débloque le pilotage au plus près du terrain.</Text>
+            {AVANTAGES_PRO.map((avantage) => (
+              <View key={avantage.titre} style={styles.modalePoint}>
+                <Text style={styles.modalePuce}>•</Text>
+                <View style={styles.modalePointCorps}>
+                  <Text style={styles.modalePointTitre}>{avantage.titre}</Text>
+                  <Text style={styles.modaleLead}>{avantage.detail}</Text>
+                </View>
+              </View>
+            ))}
+            {lienStripe ? null : confirme ? (
+              <View style={styles.proConfirmation}>
+                <Text style={styles.proConfirmationTexte}>Demande enregistrée. MakConsult a bien reçu votre e-mail professionnel et le nom de votre entreprise. L’accès Pro sera activé après traitement.</Text>
+              </View>
+            ) : (
+              <View style={styles.proForm}>
+                <View style={styles.proChamp}>
+                  <Text style={styles.proLabel}>E-mail professionnel</Text>
+                  <TextInput
+                    style={styles.proInput}
+                    value={email}
+                    onChangeText={setEmail}
+                    autoCapitalize="none"
+                    autoComplete="email"
+                    keyboardType="email-address"
+                    placeholder="prenom.nom@entreprise.com"
+                    placeholderTextColor="#94A3B8"
+                    editable={!envoi}
+                  />
+                </View>
+                <View style={styles.proChamp}>
+                  <Text style={styles.proLabel}>Entreprise</Text>
+                  <TextInput
+                    style={styles.proInput}
+                    value={entreprise}
+                    onChangeText={setEntreprise}
+                    placeholder="Nom de l'entreprise"
+                    placeholderTextColor="#94A3B8"
+                    editable={!envoi}
+                    maxLength={200}
+                  />
+                </View>
+              </View>
+            )}
+            {erreur ? <Text style={styles.proErreur}>{erreur}</Text> : null}
+            {paiementOuvert ? <Text style={styles.modaleLead}>Le paiement s’est ouvert dans un nouvel onglet.</Text> : null}
+            {lienStripe && !paiementOuvert ? <Text style={styles.modaleLead}>Le paiement s’ouvre dans un nouvel onglet.</Text> : null}
+            {confirme ? null : (
+              <TouchableOpacity style={[styles.uploadBtn, envoi && styles.generateBtnDisabled]} onPress={activer} disabled={envoi}>
+                {envoi ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.uploadBtnText}>Activer mon accès Pro</Text>}
+              </TouchableOpacity>
+            )}
+            {!lienStripe && !confirme ? <Text style={styles.modaleLead}>Dès l’envoi, la demande est enregistrée et confirmée à l’écran.</Text> : null}
+            <TouchableOpacity style={styles.modaleFermer} onPress={onFermer} disabled={envoi}>
+              <Text style={styles.resetText}>Fermer</Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -2512,6 +2624,7 @@ export default function FlashWFM() {
           </TouchableOpacity>
         </View>
         <LienReinitialisation />
+        <PiedLegal />
       </View>
       {toast ? (
         <View style={styles.toast}>
@@ -2545,12 +2658,7 @@ export default function FlashWFM() {
         exportsVerrouilles={!isPro}
         onExportsVerrouilles={() => setModalePro(true)}
       />
-      <ModalePro
-        visible={modalePro}
-        enCours={paiementEnCours}
-        onFermer={() => { if (!paiementEnCours) setModalePro(false); }}
-        onPasser={() => { void passerAuPro(); }}
-      />
+      <ModalePro visible={modalePro} onFermer={() => setModalePro(false)} />
       <ModaleFeedback
         visible={feedbackOuvert}
         type={typeRetour}
@@ -2623,7 +2731,18 @@ const styles = StyleSheet.create({
   modaleLead: { color: '#687581', fontSize: 14, lineHeight: 20 },
   modalePoint: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   modalePuce: { color: '#F4C430', fontSize: 18, fontWeight: '600', lineHeight: 22 },
+  modalePointCorps: { flex: 1, gap: 2 },
+  modalePointTitre: { color: '#0F2D46', fontSize: 15, fontWeight: '700', lineHeight: 22 },
   modalePointTexte: { flex: 1, color: '#0F2D46', fontSize: 15, lineHeight: 22 },
+  modaleScroll: { flexGrow: 0, maxHeight: 560 },
+  modaleScrollContenu: { gap: 12 },
+  proForm: { gap: 10 },
+  proChamp: { gap: 4 },
+  proLabel: { color: '#64748B', fontSize: 12, fontWeight: '600' },
+  proInput: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', height: 40, paddingHorizontal: 16, borderRadius: 8, fontSize: 14, color: '#1E293B', width: '100%' },
+  proConfirmation: { backgroundColor: '#E7F6F4', borderWidth: 1, borderColor: '#2E8F86', borderRadius: 8, padding: 12 },
+  proConfirmationTexte: { color: '#0F2D46', fontSize: 14, lineHeight: 20 },
+  proErreur: { color: '#A33B32', fontSize: 13, lineHeight: 18 },
   modaleFermer: { alignItems: 'center', paddingVertical: 4 },
   puces: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   puce: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#FFFFFF' },
@@ -2691,7 +2810,7 @@ const styles = StyleSheet.create({
   generateBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '600', textAlign: 'center' },
   horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 8 },
   horizonBtn: { flex: 1, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 136 },
+  dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 176 },
   dash: { width: '100%', maxWidth: 1100, alignItems: 'stretch' },
   panel: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', marginBottom: 16, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   panelTitle: { fontSize: 18, color: '#0F2D46', fontWeight: '700', marginBottom: 12 },
@@ -2807,7 +2926,7 @@ const styles = StyleSheet.create({
   footerBackText: { color: '#1E293B', fontWeight: '600', fontSize: 14 },
   footerNext: { backgroundColor: '#0F2D46', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, minWidth: 180, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
   footerNextText: { color: '#F4C430', fontWeight: '600', fontSize: 14 },
-  toast: { position: 'absolute', left: 16, right: 16, bottom: 84, alignSelf: 'center', maxWidth: 420, backgroundColor: '#0F2D46', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10 },
+  toast: { position: 'absolute', left: 16, right: 16, bottom: 128, alignSelf: 'center', maxWidth: 420, backgroundColor: '#0F2D46', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10 },
   toastText: { color: '#F8FAFC', fontSize: 13, fontWeight: '600', textAlign: 'center' },
   ajustBloc: { marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#E6E9EE' },
   ajustTitre: { color: '#0F2D46', fontSize: 16, fontWeight: '600' },
