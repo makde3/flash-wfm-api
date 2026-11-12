@@ -20,6 +20,27 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function profilLu(ligne: { plan?: string | null; role?: string | null } | null): ProfilAuth {
+  return {
+    plan: ligne?.plan === 'pro' ? 'pro' : 'free',
+    role: ligne?.role === 'admin' ? 'admin' : undefined,
+  };
+}
+
+async function profilUtilisateur(id: string, email: string | null): Promise<ProfilAuth> {
+  const complet = await supabase.from('profiles').select('plan, role').eq('user_id', id).maybeSingle();
+  if (!complet.error) {
+    if (complet.data) return profilLu(complet.data);
+  } else {
+    const simple = await supabase.from('profiles').select('plan').eq('user_id', id).maybeSingle();
+    if (simple.error) return { plan: 'free' };
+    if (simple.data) return profilLu(simple.data);
+  }
+  const { error } = await supabase.from('profiles').insert({ user_id: id, email, plan: 'free' });
+  if (error && !/duplicate|unique/i.test(error.message)) console.error(error);
+  return { plan: 'free' };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [devForcePro, setDevForcePro] = useState(false);
@@ -27,36 +48,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [abonnementActif, setAbonnementActif] = useState(false);
   const [finEssai, setFinEssai] = useState<number | null>(null);
   const toggleDevPro = () => setDevForcePro((prev) => !prev);
-  const isPro = true;
-  const poserAdminLocal = () => setProfile((actuel) => ({ plan: actuel?.plan ?? 'pro', role: 'admin' }));
+  const isPro = profile?.plan === 'pro' || profile?.role === 'admin';
   const assurerDroits = () => {
     void (async () => {
       try {
         const { data } = await supabase.auth.getSession();
         const user = data.session?.user;
         if (!user) {
-          poserAdminLocal();
+          setProfile({ plan: 'free' });
           return;
         }
-        const { data: ligne, error } = await supabase.from('profiles').select('user_id').eq('user_id', user.id).maybeSingle();
-        if (!error && ligne) return;
-        poserAdminLocal();
-        const { error: erreurInsert } = await supabase.from('profiles').insert({
-          user_id: user.id,
-          email: user.email ?? null,
-          plan: 'free',
-        });
-        if (erreurInsert) console.error(erreurInsert);
+        setProfile(await profilUtilisateur(user.id, user.email ?? null));
       } catch (error) {
         console.error(error);
-        poserAdminLocal();
+        setProfile({ plan: 'free' });
       }
     })();
   };
 
   useEffect(() => {
     let actif = true;
-    const charger = async (id: string | null, createdAt?: string) => {
+    const charger = async (id: string | null, createdAt?: string, email?: string | null) => {
       if (!actif) return;
       if (!id) {
         setUserId(null);
@@ -66,22 +78,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setUserId(id);
-      const { data: abonnements } = await supabase.from('subscriptions').select('status').eq('user_id', id);
+      const [{ data: abonnements }, profil] = await Promise.all([
+        supabase.from('subscriptions').select('status').eq('user_id', id),
+        profilUtilisateur(id, email ?? null),
+      ]);
       if (!actif) return;
       const creation = createdAt ? new Date(createdAt).getTime() : Date.now();
       setFinEssai(creation + 3 * 24 * 60 * 60 * 1000);
       setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
-      setProfile({ plan: 'pro' });
+      setProfile(profil);
     };
     supabase.auth.getSession().then(({ data }) => {
       const user = data.session?.user;
-      void charger(user?.id ?? null, user?.created_at);
+      void charger(user?.id ?? null, user?.created_at, user?.email);
     });
     const { data: ecoute } = supabase.auth.onAuthStateChange((event, session) => {
       if (!session && event !== 'SIGNED_OUT') return;
       const user = session?.user;
       setTimeout(() => {
-        void charger(user?.id ?? null, user?.created_at);
+        void charger(user?.id ?? null, user?.created_at, user?.email);
       }, 0);
     });
     return () => {

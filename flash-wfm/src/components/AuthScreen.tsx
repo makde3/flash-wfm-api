@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { ActivityIndicator, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { LienReinitialisation } from '../lib/session';
-import { sendDiscordNotif } from '../services/discordNotifier';
 import { supabase } from '../lib/supabase';
 
 type AuthScreenProps = {
@@ -35,9 +34,6 @@ export default function AuthScreen({ emailConfirme = false, erreurConfirmation =
     if (error) {
       setMessage(error.message);
       return;
-    }
-    if (mode === 'connexion' && data.session) {
-      void sendDiscordNotif('Connexion', adresse, 'login');
     }
     if (mode === 'inscription' && !data.session) {
       setMessage('Compte créé. Confirmez votre e-mail, puis connectez-vous.');

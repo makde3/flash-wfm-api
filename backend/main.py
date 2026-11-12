@@ -456,8 +456,8 @@ def client_service():
         _client_service = create_client(url, cle)
     return _client_service
 
-def profil_admin_local() -> dict:
-    return {"role": "admin", "created_at": datetime.now(timezone.utc).isoformat()}
+def profil_libre(created_at: str | None = None) -> dict:
+    return {"plan": "free", "created_at": created_at or datetime.now(timezone.utc).isoformat()}
 
 def creer_profil_si_absent(user_id: str) -> None:
     try:
@@ -472,23 +472,28 @@ def lancer_creation_profil(user_id: str) -> None:
     threading.Thread(target=creer_profil_si_absent, args=(user_id,), daemon=True).start()
 
 def lire_profil(user_id: str) -> dict:
-    try:
-        reponse = (
-            client_service().table("profiles")
-            .select("created_at")
-            .eq("user_id", user_id)
-            .limit(1)
-            .execute()
-        )
-    except Exception:
-        print("-> Lecture du profil impossible", flush=True)
-        lancer_creation_profil(user_id)
-        return profil_admin_local()
-    lignes = reponse.data or []
-    if not lignes:
-        lancer_creation_profil(user_id)
-        return profil_admin_local()
-    return lignes[0]
+    for colonnes in ("plan, role, created_at", "plan, created_at", "created_at"):
+        try:
+            reponse = (
+                client_service().table("profiles")
+                .select(colonnes)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception:
+            continue
+        lignes = reponse.data or []
+        if not lignes:
+            lancer_creation_profil(user_id)
+            return profil_libre()
+        ligne = dict(lignes[0])
+        if ligne.get("plan") != "pro":
+            ligne["plan"] = "free"
+        return ligne
+    print("-> Lecture du profil impossible", flush=True)
+    lancer_creation_profil(user_id)
+    return profil_libre()
 
 def periode_encore_valide(valeur) -> bool:
     if not valeur:
@@ -578,9 +583,7 @@ def entrainer_lightgbm(df, dates_futur):
     return previsions, "LightGBM"
 
 def verifier_droit_modele(modele: str, profil: dict, pro_actif: bool) -> None:
-    # Contournement temporaire : modèles et essai ouverts pour toutes les sessions.
-    return
-    if pro_actif:
+    if pro_actif or profil.get("plan") == "pro" or profil.get("role") == "admin":
         return
     if modele_avance(modele):
         raise HTTPException(status_code=403, detail="Ce modèle nécessite un abonnement Pro.")
@@ -639,6 +642,12 @@ def enregistrer_abonnement(abonnement: dict, supprime: bool) -> None:
         if user_id:
             champs["user_id"] = user_id
             client.table("subscriptions").upsert(champs, on_conflict="stripe_subscription_id").execute()
+            try:
+                client.table("profiles").update({
+                    "plan": "pro" if statut in {"active", "trialing"} else "free",
+                }).eq("user_id", user_id).execute()
+            except Exception:
+                print("-> Mise a jour du plan impossible", flush=True)
             return
         existant = (
             client.table("subscriptions")

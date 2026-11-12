@@ -33,6 +33,7 @@ import { marquerNouveautesVues, marquerTourVu, nouveautesDejaVues, tourDejaVu } 
 import { ETAPES_GUIDE, lancerTourDriver } from '../lib/tourGuide';
 import { enregistrerLienEtp, enregistrerLienSource, lireLiensProfil } from '../lib/sourceProfil';
 import { enregistrerResetWizard } from '../lib/wizardStore';
+import { useInstallationPwa } from '../lib/installationPwa';
 import {
   couverturesDuPlan,
   ecrireCache,
@@ -379,20 +380,63 @@ function ModaleFeedback({
   );
 }
 
+function ModalePro({ visible, enCours, onFermer, onPasser }: { visible: boolean; enCours: boolean; onFermer: () => void; onPasser: () => void }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
+      <View style={styles.voile}>
+        <View style={styles.modale}>
+          <Ionicons name="lock-closed" size={28} color="#0F2D46" />
+          <Text style={styles.modaleTitre}>Offre Pro</Text>
+          <Text style={styles.modaleLead}>Le planning ETP jour par jour, les exports Excel et PowerPoint, et les ajustements événementiels sont réservés à l'offre Pro.</Text>
+          <TouchableOpacity style={[styles.uploadBtn, enCours && styles.generateBtnDisabled]} onPress={onPasser} disabled={enCours}>
+            {enCours ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.uploadBtnText}>Passer en Pro</Text>}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.modaleFermer} onPress={onFermer} disabled={enCours}>
+            <Text style={styles.resetText}>Fermer</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ModaleInstallation({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
+      <View style={styles.voile}>
+        <View style={styles.modale}>
+          <Ionicons name="share-outline" size={28} color="#0F2D46" />
+          <Text style={styles.modaleTitre}>Installer sur l'écran d'accueil</Text>
+          <Text style={styles.modaleLead}>Sur iPhone et iPad, Safari n'ouvre pas de fenêtre d'installation. Ajoutez Flash WFM à la main :</Text>
+          <Text style={styles.installEtape}>1. Touchez l'icône Partager (le carré avec la flèche).</Text>
+          <Text style={styles.installEtape}>2. Faites défiler, puis touchez « Sur l'écran d'accueil ».</Text>
+          <Text style={styles.installEtape}>3. Confirmez avec « Ajouter ».</Text>
+          <TouchableOpacity style={styles.modaleFermer} onPress={onFermer}>
+            <Text style={styles.resetText}>Fermer</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function HeaderLogo({
   abonnementActif,
   paiementEnCours,
   onAbonnement,
+  onPasserPro,
   onReinitialiser,
   onFeedback,
 }: {
   abonnementActif: boolean;
   paiementEnCours: boolean;
   onAbonnement: () => void;
+  onPasserPro: () => void;
   onReinitialiser: () => void;
   onFeedback: () => void;
 }) {
-  const { isPro, toggleDevPro } = useAuth();
+  const { isPro } = useAuth();
+  const installation = useInstallationPwa();
   return (
     <View style={styles.headerContainer}>
       <View style={styles.headerBrand}>
@@ -408,6 +452,18 @@ function HeaderLogo({
         </View>
       </View>
       <View style={styles.headerActions}>
+        {!isPro ? (
+          <TouchableOpacity style={styles.proHeaderBtn} onPress={onPasserPro}>
+            <Ionicons name="flash" size={16} color="#0F2D46" />
+            <Text style={styles.proHeaderTexte}>Passer en Pro</Text>
+          </TouchableOpacity>
+        ) : null}
+        {installation.visible ? (
+          <TouchableOpacity style={styles.installBtn} onPress={installation.installer}>
+            <Ionicons name="phone-portrait-outline" size={16} color="#0F2D46" />
+            <Text style={styles.installBtnTexte}>Installer l'app</Text>
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity style={styles.resetBtn} onPress={onFeedback}>
           <Text style={styles.resetText}>Une idée ? / Feedback</Text>
         </TouchableOpacity>
@@ -422,14 +478,15 @@ function HeaderLogo({
           </TouchableOpacity>
         ) : null}
         {__DEV__ && (
-          <TouchableOpacity style={[styles.devBadge, isPro ? styles.devBadgePro : styles.devBadgeFree]} onPress={toggleDevPro}>
+          <View style={[styles.devBadge, isPro ? styles.devBadgePro : styles.devBadgeFree]}>
             <Text style={styles.devBadgeText}>{isPro ? 'DEV : PRO' : 'DEV : FREE'}</Text>
-          </TouchableOpacity>
+          </View>
         )}
         <TouchableOpacity style={styles.logoutBtn} onPress={() => { void deconnecter(); }}>
           <Text style={styles.logoutText}>Déconnexion</Text>
         </TouchableOpacity>
       </View>
+      <ModaleInstallation visible={installation.aideIos} onFermer={installation.fermerAide} />
     </View>
   );
 }
@@ -1088,7 +1145,7 @@ function ZoneImport({
       </View>
       {mode === 'fichier' ? (
         <TouchableOpacity style={[styles.dropZone, verrouille && styles.modelBtnLocked]} onPress={onFichier}>
-          <Ionicons name="cloud-upload-outline" size={28} color="#0F2D46" />
+          <Ionicons name={verrouille ? 'lock-closed' : 'cloud-upload-outline'} size={28} color="#0F2D46" />
           <Text style={styles.dropTitle}>{titre}</Text>
           <Text style={styles.dropDetail}>{detail}</Text>
         </TouchableOpacity>
@@ -1106,8 +1163,13 @@ function ZoneImport({
             editable={!enCours}
           />
           <Text style={styles.hint}>Le document doit être accessible en lecture avec le lien de partage.</Text>
-          <TouchableOpacity style={[styles.nextBtn, enCours && styles.generateBtnDisabled]} onPress={onValider} disabled={enCours}>
-            {enCours ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.nextBtnText}>Importer le lien</Text>}
+          <TouchableOpacity style={[styles.nextBtn, enCours && styles.generateBtnDisabled, verrouille && styles.modelBtnLocked]} onPress={onValider} disabled={enCours}>
+            {enCours ? <ActivityIndicator color="#FFFFFF" /> : (
+              <View style={styles.boutonLigne}>
+                {verrouille ? <Ionicons name="lock-closed" size={16} color="#FFFFFF" /> : null}
+                <Text style={styles.nextBtnText}>Importer le lien</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       )}
@@ -1119,8 +1181,11 @@ function ZoneImport({
             </TouchableOpacity>
           ) : null}
           {onExemple ? (
-            <TouchableOpacity style={styles.exempleBtn} onPress={onExemple}>
-              <Text style={styles.exempleBtnText}>Charger des données d'exemple</Text>
+            <TouchableOpacity style={[styles.exempleBtn, verrouille && styles.modelBtnLocked]} onPress={onExemple}>
+              <View style={styles.boutonLigne}>
+                {verrouille ? <Ionicons name="lock-closed" size={14} color="#0F2D46" /> : null}
+                <Text style={styles.exempleBtnText}>Charger des données d'exemple</Text>
+              </View>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -1161,7 +1226,7 @@ export default function FlashWFM() {
   const [ajustementsSaisis, setAjustementsSaisis] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const { userId, isPro, abonnementActif, assurerDroits } = useAuth();
-  const [, setModalePro] = useState(false);
+  const [modalePro, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -2112,6 +2177,7 @@ export default function FlashWFM() {
             abonnementActif={abonnementActif}
             paiementEnCours={paiementEnCours}
             onAbonnement={abonnementActif ? gererAbonnement : passerAuPro}
+            onPasserPro={() => setModalePro(true)}
             onReinitialiser={reinitialiser}
             onFeedback={() => setFeedbackOuvert(true)}
           />
@@ -2160,6 +2226,7 @@ export default function FlashWFM() {
             <View nativeID="tour-etp" style={[styles.panel, tourIndex === 1 && styles.tourCible]}>
               <View style={styles.titleRow}>
                 <Text style={[styles.panelTitle, styles.panelTitleInline]}>Étape 2 : Planning ETP réels</Text>
+                {!isPro ? <Ionicons name="lock-closed" size={16} color="#0F2D46" /> : null}
                 <Text style={styles.proBadge}>Pro</Text>
               </View>
               <ZoneImport
@@ -2190,8 +2257,11 @@ export default function FlashWFM() {
               ) : null}
               <View style={styles.actionRow}>
                 {etpBrouillon?.length ? (
-                  <TouchableOpacity style={[styles.nextBtn, styles.actionBtn, !isPro && styles.generateBtnDisabled]} onPress={validerEtp}>
-                    <Text style={styles.nextBtnText}>Valider</Text>
+                  <TouchableOpacity style={[styles.nextBtn, styles.actionBtn, !isPro && styles.modelBtnLocked]} onPress={validerEtp}>
+                    <View style={styles.boutonLigne}>
+                      {!isPro ? <Ionicons name="lock-closed" size={16} color="#FFFFFF" /> : null}
+                      <Text style={styles.nextBtnText}>Valider</Text>
+                    </View>
                   </TouchableOpacity>
                 ) : null}
                 <TouchableOpacity style={[styles.secondaryBtn, styles.actionBtn]} onPress={passerEtp}>
@@ -2374,15 +2444,25 @@ export default function FlashWFM() {
                   <View style={styles.planHeader}>
                     <Text style={styles.planHeaderTitle}>Plan de production</Text>
                     <View style={styles.planActions}>
-                      <TouchableOpacity style={[styles.ajustToggle, ajustementsOuverts && styles.ajustToggleOn]} onPress={() => setAjustementsOuverts((ouvert) => !ouvert)}>
-                        <Ionicons name="options-outline" size={16} color={ajustementsOuverts ? '#F8FAFC' : '#0F2D46'} />
-                        <Text style={[styles.ajustToggleTexte, ajustementsOuverts && styles.ajustToggleTexteOn]}>Ajustements événementiels (% métier)</Text>
+                      <TouchableOpacity
+                        style={[styles.ajustToggle, ajustementsOuverts && styles.ajustToggleOn, !isPro && styles.modelBtnLocked]}
+                        onPress={() => {
+                          if (!isPro) {
+                            setModalePro(true);
+                            return;
+                          }
+                          setAjustementsOuverts((ouvert) => !ouvert);
+                        }}
+                      >
+                        <Ionicons name={!isPro ? 'lock-closed' : 'options-outline'} size={16} color={ajustementsOuverts && isPro ? '#F8FAFC' : '#0F2D46'} />
+                        <Text style={[styles.ajustToggleTexte, ajustementsOuverts && isPro && styles.ajustToggleTexteOn]}>Ajustements événementiels (% métier)</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.syntheseBtn} onPress={() => { void ouvrirSynthese(); }}>
                         <Ionicons name="bar-chart-outline" size={16} color="#F4C430" />
                         <Text style={styles.syntheseBtnText}>Synthèse & Comparatif</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={[styles.exportBtn, !isPro && styles.modelBtnLocked]} onPress={handleExport}>
+                        {!isPro ? <Ionicons name="lock-closed" size={16} color="#0F2D46" /> : null}
                         <Text style={styles.exportBtnText}>Exporter en Excel</Text>
                       </TouchableOpacity>
                     </View>
@@ -2462,6 +2542,14 @@ export default function FlashWFM() {
         holt={cadreSynthese.holt}
         light={cadreSynthese.light}
         pourcentages={saisiesAjustement}
+        exportsVerrouilles={!isPro}
+        onExportsVerrouilles={() => setModalePro(true)}
+      />
+      <ModalePro
+        visible={modalePro}
+        enCours={paiementEnCours}
+        onFermer={() => { if (!paiementEnCours) setModalePro(false); }}
+        onPasser={() => { void passerAuPro(); }}
       />
       <ModaleFeedback
         visible={feedbackOuvert}
@@ -2630,7 +2718,13 @@ const styles = StyleSheet.create({
   planActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginLeft: 'auto' },
   syntheseBtn: { backgroundColor: '#0F2D46', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
   syntheseBtnText: { color: '#F4C430', fontWeight: '600', fontSize: 14 },
-  exportBtn: { backgroundColor: '#F4C430', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, justifyContent: 'center' },
+  exportBtn: { backgroundColor: '#F4C430', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  proHeaderBtn: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, backgroundColor: '#F4C430', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  proHeaderTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  installBtn: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  installBtnTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  installEtape: { color: '#1E293B', fontSize: 14, lineHeight: 20 },
+  boutonLigne: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   exportBtnText: { color: '#0F2D46', fontWeight: '600', fontSize: 14 },
   paramGrid: { flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'flex-start', gap: 12, width: '100%', marginTop: 16 },
   paramGridLigne: { flexWrap: 'nowrap' },

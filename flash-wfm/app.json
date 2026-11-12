@@ -21,7 +21,17 @@
     },
     "web": {
       "output": "single",
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "Flash WFM",
+      "shortName": "Flash WFM",
+      "lang": "fr",
+      "scope": "/",
+      "startUrl": "/",
+      "display": "standalone",
+      "orientation": "any",
+      "themeColor": "#0F2D46",
+      "backgroundColor": "#0F2D46",
+      "description": "Dimensionnement et plan de production."
     },
     "plugins": [
       "expo-router",

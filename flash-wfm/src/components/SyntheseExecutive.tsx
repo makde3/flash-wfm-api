@@ -48,6 +48,8 @@ type Props = {
   holt: ResultatModele | null;
   light: ResultatModele | null;
   pourcentages: Record<string, string>;
+  exportsVerrouilles: boolean;
+  onExportsVerrouilles: () => void;
 };
 
 function nombreFR(valeur: number, decimales: number) {
@@ -218,6 +220,8 @@ export default function SyntheseExecutive({
   holt,
   light,
   pourcentages,
+  exportsVerrouilles,
+  onExportsVerrouilles,
 }: Props) {
   useEffect(() => {
     if (visible) onSkill(VUE_GLOBALE);
@@ -292,12 +296,12 @@ export default function SyntheseExecutive({
               <Text style={styles.titre}>Synthèse exécutive</Text>
             </View>
             <View style={styles.actions}>
-              <TouchableOpacity style={styles.exporter} onPress={() => lancerExport(() => exporterSyntheseExcel(dossier()))} disabled={chargement || indicateurs.every((modele) => modele.vide)}>
-                <Ionicons name="document-text-outline" size={16} color="#F4C430" />
+              <TouchableOpacity style={[styles.exporter, exportsVerrouilles && styles.exportVerrouille]} onPress={() => { if (exportsVerrouilles) onExportsVerrouilles(); else lancerExport(() => exporterSyntheseExcel(dossier())); }} disabled={!exportsVerrouilles && (chargement || indicateurs.every((modele) => modele.vide))}>
+                <Ionicons name={exportsVerrouilles ? 'lock-closed' : 'document-text-outline'} size={16} color="#F4C430" />
                 <Text style={styles.exporterTexte}>Exporter en Excel (.xlsx)</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.pptx} onPress={() => lancerExport(() => exporterSynthesePptx(dossier()))} disabled={chargement || indicateurs.every((modele) => modele.vide)}>
-                <Ionicons name="easel-outline" size={16} color="#1E293B" />
+              <TouchableOpacity style={[styles.pptx, exportsVerrouilles && styles.exportVerrouille]} onPress={() => { if (exportsVerrouilles) onExportsVerrouilles(); else lancerExport(() => exporterSynthesePptx(dossier())); }} disabled={!exportsVerrouilles && (chargement || indicateurs.every((modele) => modele.vide))}>
+                <Ionicons name={exportsVerrouilles ? 'lock-closed' : 'easel-outline'} size={16} color="#1E293B" />
                 <Text style={styles.pptxTexte}>PowerPoint (.pptx)</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.fermer} onPress={onFermer}>
@@ -395,6 +399,7 @@ const styles = StyleSheet.create({
   titre: { color: '#0F2D46', fontSize: 22, fontWeight: '600' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   exporter: { backgroundColor: '#0F2D46', borderRadius: 8, minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  exportVerrouille: { opacity: 0.55 },
   exporterTexte: { color: '#F4C430', fontWeight: '600', fontSize: 14 },
   pptx: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 8 },
   pptxTexte: { color: '#0F2D46', fontWeight: '600', fontSize: 14 },
