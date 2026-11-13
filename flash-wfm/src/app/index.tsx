@@ -598,10 +598,14 @@ function HeaderLogo({
   onReinitialiser: () => void;
   onFeedback: () => void;
 }) {
-  const { isPro, hasProAccess, heuresEssaiRestantes } = useAuth();
+  const { profile, isPro, hasProAccess, heuresEssaiRestantes } = useAuth();
   const installation = useInstallationPwa();
   const { width } = useWindowDimensions();
   const etroit = width < 760;
+  const offreVisible = profile?.plan !== 'pro' && profile?.role !== 'admin';
+  const libelleStatut = hasProAccess
+    ? `⚡ Essai Pro (${heuresEssaiRestantes}h restantes)`
+    : '🔒 Version Free';
   return (
     <View style={styles.headerContainer}>
       <View style={[styles.headerBrand, etroit && styles.headerBrandEtroit]}>
@@ -616,19 +620,17 @@ function HeaderLogo({
           <Text style={styles.brandSubtitle}>DATA · MÉTIER · PERFORMANCE</Text>
         </View>
       </View>
-      <View style={[styles.headerActions, etroit && styles.headerActionsEtroit]}>
-        {!isPro && hasProAccess ? (
-          <View style={styles.essaiChip}>
-            <Ionicons name="hourglass-outline" size={14} color="#0F2D46" />
-            <Text style={styles.essaiTexte}>Essai Pro : {heuresEssaiRestantes}h restantes</Text>
+      {offreVisible ? (
+        <View style={styles.headerOffre}>
+          <View style={[styles.essaiChip, !hasProAccess && styles.essaiChipFree]}>
+            <Text style={styles.essaiTexte}>{libelleStatut}</Text>
           </View>
-        ) : null}
-        {!isPro ? (
           <TouchableOpacity style={styles.proHeaderBtn} onPress={onPasserPro}>
-            <Ionicons name="flash" size={16} color="#0F2D46" />
-            <Text style={styles.proHeaderTexte}>Activer mon accès Pro</Text>
+            <Text style={styles.proHeaderTexte}>Passer en Pro ⚡</Text>
           </TouchableOpacity>
-        ) : null}
+        </View>
+      ) : null}
+      <View style={[styles.headerActions, etroit && styles.headerActionsEtroit]}>
         {installation.visible ? (
           <TouchableOpacity style={styles.installBtn} onPress={installation.installer}>
             <Ionicons name="phone-portrait-outline" size={16} color="#0F2D46" />
@@ -2776,18 +2778,19 @@ function moyenne(valeurs: number[]) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC', fontFamily: 'Inter, system-ui, sans-serif' },
-  headerContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 20, gap: 12, flexWrap: 'wrap' },
+  headerContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 20, gap: 12, flexWrap: 'wrap', overflow: 'visible', zIndex: 5 },
   headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 12, flexShrink: 1, minWidth: 0 },
   headerBrandEtroit: { width: '100%' },
   logoBadge: { backgroundColor: '#0F2D46', padding: 10, borderRadius: 8, borderWidth: 1.5, borderColor: '#F4C430', alignItems: 'center', justifyContent: 'center' },
-  headerTextContainer: { alignItems: 'flex-start' },
+  headerTextContainer: { alignItems: 'flex-start', flexShrink: 1 },
   brandTitle: { fontSize: 26, fontWeight: '700', color: '#0F2D46', letterSpacing: 1 },
   brandTitleEtroit: { fontSize: 22 },
   brandTitleSub: { color: '#F4C430', fontWeight: '300' },
   brandByline: { fontSize: 12, color: '#687581', fontWeight: '500', marginTop: 1 },
   brandSubtitle: { fontSize: 11, color: '#687581', fontWeight: '500', letterSpacing: 1.5, marginTop: 2 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end' },
-  headerActionsEtroit: { width: '100%', justifyContent: 'flex-start' },
+  headerOffre: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, width: '100%', flexBasis: '100%', flexShrink: 0, zIndex: 6 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexGrow: 1, flexShrink: 1, flexBasis: 280, minWidth: 0, justifyContent: 'flex-end', overflow: 'visible' },
+  headerActionsEtroit: { width: '100%', flexBasis: '100%', justifyContent: 'flex-start' },
   logoutBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#0F2D46', justifyContent: 'center' },
   resetBtn: { paddingHorizontal: 8, paddingVertical: 6 },
   resetText: { color: '#94A3B8', fontSize: 12, fontWeight: '600' },
@@ -2918,9 +2921,10 @@ const styles = StyleSheet.create({
   syntheseBtn: { backgroundColor: '#0F2D46', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
   syntheseBtnText: { color: '#F4C430', fontWeight: '600', fontSize: 14 },
   exportBtn: { backgroundColor: '#F4C430', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 8 },
-  proHeaderBtn: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, backgroundColor: '#F4C430', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  proHeaderBtn: { flexShrink: 0, minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, backgroundColor: '#F4C430', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', zIndex: 6 },
   proHeaderTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
-  essaiChip: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#FFF8E1', borderWidth: 1, borderColor: '#F4C430', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  essaiChip: { flexShrink: 0, minHeight: 40, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#FFF8E1', borderWidth: 1, borderColor: '#F4C430', justifyContent: 'center', zIndex: 6 },
+  essaiChipFree: { backgroundColor: '#F8FAFC', borderColor: '#CBD5E1' },
   essaiTexte: { color: '#0F2D46', fontSize: 13, fontWeight: '600' },
   installBtn: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', gap: 8 },
   installBtnTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },

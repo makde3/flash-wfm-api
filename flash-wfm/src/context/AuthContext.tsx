@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 
 export type ProfilAuth = {
   plan: 'free' | 'pro';
-  role?: 'admin';
+  role: 'user' | 'admin';
 };
 
 const ESSAI_MS = 48 * 60 * 60 * 1000;
@@ -24,25 +24,34 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function profilLibre(): ProfilAuth {
+  return { plan: 'free', role: 'user' };
+}
+
 function profilLu(ligne: { plan?: string | null; role?: string | null } | null): ProfilAuth {
   return {
     plan: ligne?.plan === 'pro' ? 'pro' : 'free',
-    role: ligne?.role === 'admin' ? 'admin' : undefined,
+    role: ligne?.role === 'admin' ? 'admin' : 'user',
   };
 }
 
 async function profilUtilisateur(id: string, email: string | null): Promise<ProfilAuth> {
-  const complet = await supabase.from('profiles').select('plan, role').eq('user_id', id).maybeSingle();
-  if (!complet.error) {
-    if (complet.data) return profilLu(complet.data);
-  } else {
-    const simple = await supabase.from('profiles').select('plan').eq('user_id', id).maybeSingle();
-    if (simple.error) return { plan: 'free' };
-    if (simple.data) return profilLu(simple.data);
+  try {
+    const complet = await supabase.from('profiles').select('plan, role').eq('user_id', id).maybeSingle();
+    if (!complet.error) {
+      if (complet.data) return profilLu(complet.data);
+    } else {
+      const simple = await supabase.from('profiles').select('plan').eq('user_id', id).maybeSingle();
+      if (simple.error || !simple.data) return profilLibre();
+      return profilLu(simple.data);
+    }
+    const { error } = await supabase.from('profiles').insert({ user_id: id, email, plan: 'free' });
+    if (error && !/duplicate|unique/i.test(error.message)) console.error(error);
+    return profilLibre();
+  } catch (error) {
+    console.error(error);
+    return profilLibre();
   }
-  const { error } = await supabase.from('profiles').insert({ user_id: id, email, plan: 'free' });
-  if (error && !/duplicate|unique/i.test(error.message)) console.error(error);
-  return { plan: 'free' };
 }
 
 function instantCreation(createdAt?: string) {
@@ -69,13 +78,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data } = await supabase.auth.getSession();
         const user = data.session?.user;
         if (!user) {
-          setProfile({ plan: 'free' });
+          setProfile(profilLibre());
           return;
         }
         setProfile(await profilUtilisateur(user.id, user.email ?? null));
       } catch (error) {
         console.error(error);
-        setProfile({ plan: 'free' });
+        setProfile(profilLibre());
       }
     })();
   };
@@ -92,15 +101,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setUserId(id);
-      const [{ data: abonnements }, profil] = await Promise.all([
-        supabase.from('subscriptions').select('status').eq('user_id', id),
-        profilUtilisateur(id, email ?? null),
-      ]);
-      if (!actif) return;
-      const creation = instantCreation(createdAt);
-      setFinEssai(creation == null ? null : creation + ESSAI_MS);
-      setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
-      setProfile(profil);
+      try {
+        const [{ data: abonnements }, profil] = await Promise.all([
+          supabase.from('subscriptions').select('status').eq('user_id', id),
+          profilUtilisateur(id, email ?? null),
+        ]);
+        if (!actif) return;
+        const creation = instantCreation(createdAt);
+        setFinEssai(creation == null ? null : creation + ESSAI_MS);
+        setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
+        setProfile(profil);
+      } catch (error) {
+        console.error(error);
+        if (!actif) return;
+        const creation = instantCreation(createdAt);
+        setFinEssai(creation == null ? null : creation + ESSAI_MS);
+        setAbonnementActif(false);
+        setProfile(profilLibre());
+      }
     };
     supabase.auth.getSession().then(({ data }) => {
       const user = data.session?.user;
