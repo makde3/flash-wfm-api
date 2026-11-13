@@ -14,7 +14,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [emailConfirme, setEmailConfirme] = useState(retourConfirmation.confirme);
   const [sessionExpiree, setSessionExpiree] = useState<string | null>(null);
-  const bloquerSessionLien = useState({ courant: retourConfirmation.confirme })[0];
+  const bloquerSessionLien = useState({ courant: retourConfirmation.confirme, inscription: false })[0];
 
   useEffect(() => {
     let actif = true;
@@ -84,6 +84,14 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         sessionExpiree={sessionExpiree}
         onConnexion={() => {
           bloquerSessionLien.courant = false;
+        }}
+        onInscription={() => {
+          bloquerSessionLien.inscription = true;
+          bloquerSessionLien.courant = true;
+        }}
+        onEchecInscription={() => {
+          if (bloquerSessionLien.inscription && !retourConfirmation.confirme) bloquerSessionLien.courant = false;
+          bloquerSessionLien.inscription = false;
         }}
       />
     );

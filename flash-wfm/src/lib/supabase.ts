@@ -10,21 +10,25 @@ export type RetourConfirmation = {
   erreur: string | null;
 };
 
-function lireParametresPage(): { type: string | null; erreur: string | null } {
-  if (typeof window === 'undefined') return { type: null, erreur: null };
+function lireParametresPage(): { type: string | null; erreur: string | null; code: boolean } {
+  if (typeof window === 'undefined') return { type: null, erreur: null, code: false };
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   const query = new URLSearchParams(window.location.search);
   const brut = hash.get('error_description') || query.get('error_description');
   return {
     type: hash.get('type') || query.get('type'),
     erreur: brut ? decodeURIComponent(brut.replace(/\+/g, ' ')) : null,
+    code: Boolean(query.get('code') || hash.get('access_token')),
   };
 }
 
 const retourPage = lireParametresPage();
 
 export const retourConfirmation: RetourConfirmation = {
-  confirme: Boolean(retourPage.type && TYPES_CONFIRMATION.has(retourPage.type) && !retourPage.erreur),
+  confirme: Boolean(
+    !retourPage.erreur
+    && ((retourPage.type && TYPES_CONFIRMATION.has(retourPage.type)) || (!retourPage.type && retourPage.code)),
+  ),
   erreur: retourPage.erreur,
 };
 
