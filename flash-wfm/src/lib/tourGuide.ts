@@ -7,7 +7,8 @@ const CSS_DRIVER = `
 .driver-layer{width:auto;max-width:none;height:auto;max-height:none;color:inherit;pointer-events:none;background:0 0;border:0;margin:0;padding:0;position:fixed;inset:0;overflow:visible}
 .driver-layer::backdrop{display:none}
 .driver-layer .driver-popover{pointer-events:auto}
-.driver-popover{all:unset;font-family:Inter,system-ui,sans-serif;box-sizing:border-box;color:#1E293B;z-index:1000000000;background-color:#fff;border:1px solid #E2E8F0;border-radius:8px;min-width:250px;max-width:320px;margin:0;padding:15px;position:fixed;top:0;right:0;box-shadow:0 1px 2px #0F172A0F}
+.driver-popover{all:unset;font-family:Inter,system-ui,sans-serif;box-sizing:border-box;color:#1E293B;z-index:1000000000;background-color:#fff;border:1px solid #E2E8F0;border-radius:8px;width:min(320px,calc(100vw - 24px));min-width:0;max-width:calc(100vw - 24px);margin:0;padding:15px;position:fixed;top:0;left:0;right:auto;box-shadow:0 1px 2px #0F172A0F}
+#tour-source,#tour-etp,#tour-leviers,#tour-modeles,#tour-generer,#tour-plan,#tour-bilan{scroll-margin:120px}
 .driver-popover-title{margin:0;font-size:16px;font-weight:600;line-height:1.4;display:block;position:relative;padding-right:28px}
 .driver-popover-close-btn{all:unset;cursor:pointer;color:#94A3B8;z-index:1;text-align:center;width:32px;height:28px;font-size:18px;position:absolute;top:0;right:0}
 .driver-popover-close-btn:hover{color:#0F2D46}
@@ -34,18 +35,71 @@ const CSS_DRIVER = `
 `;
 
 export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: string }[] = [
-  { id: 'tour-source', etape: 1, titre: 'Source de données', texte: 'Local ou lien Web (Google Sheets, Office 365).' },
-  { id: 'tour-etp', etape: 2, titre: 'Effectif terrain', texte: 'Importez le planning, ou passez : l’ETP moyen se règle sur le plan.' },
-  { id: 'tour-leviers', etape: 3, titre: 'Cadence & Qualité', texte: 'Leviers de staffing Erlang C.' },
-  { id: 'tour-bilan', etape: 4, titre: 'Bilan des écarts & Export', texte: 'Lisez les écarts, puis exportez le plan.' },
+  {
+    id: 'tour-source',
+    etape: 1,
+    titre: 'Import des flux',
+    texte: 'Importez l’historique de volumes, en fichier local ou par lien Web. DMT, SLA, occupation et shrinkage se règlent sur l’écran de dimensionnement. L’essai Pro complet de 48 h est inclus dès l’inscription.',
+  },
+  {
+    id: 'tour-etp',
+    etape: 2,
+    titre: 'Planning ETP réels',
+    texte: 'Intégrez le planning des ETP réellement présents pour mesurer les écarts de capacité. Sans fichier, vous pouvez passer cette étape.',
+  },
+  {
+    id: 'tour-leviers',
+    etape: 3,
+    titre: 'Paramétrage',
+    texte: 'Réglez la DMT, le SLA, l’occupation et le shrinkage. Ces leviers alimentent le calcul Erlang C avant la prévision.',
+  },
+  {
+    id: 'tour-modeles',
+    etape: 4,
+    titre: 'Moteurs de prévision',
+    texte: 'Comparez la Moyenne mobile, Saisonnalité & Tendances, IA & Machine Learning et le Modèle Hybride. Auto retient le moteur au plus faible WAPE.',
+  },
+  {
+    id: 'tour-restitution',
+    etape: 4,
+    titre: 'Plan, synthèse et exports',
+    texte: 'Le plan de production reçoit les ajustements événementiels (% métier). La synthèse exécutive s’ouvre sur la vue globale, puis les exports Excel et PowerPoint emportent le résultat.',
+  },
 ];
 
+function recadrerPopover() {
+  const bulle = document.querySelector('.driver-popover');
+  if (!(bulle instanceof HTMLElement)) return;
+  const rect = bulle.getBoundingClientRect();
+  const marge = 12;
+  let gauche = rect.left;
+  let haut = rect.top;
+  if (rect.right > window.innerWidth - marge) gauche -= rect.right - (window.innerWidth - marge);
+  if (gauche < marge) gauche = marge;
+  if (rect.bottom > window.innerHeight - marge) haut -= rect.bottom - (window.innerHeight - marge);
+  if (haut < marge) haut = marge;
+  bulle.style.left = `${gauche}px`;
+  bulle.style.top = `${haut}px`;
+}
+
+function cibleEtape(id: string) {
+  if (id === 'tour-restitution') return document.getElementById('tour-plan') ?? document.getElementById('tour-generer');
+  return document.getElementById(id);
+}
+
+function montrerEtape(id: string) {
+  cibleEtape(id)?.scrollIntoView({ block: 'center', inline: 'nearest' });
+}
+
 function injecterCss() {
-  if (typeof document === 'undefined' || document.getElementById('flash-driver-css')) return;
-  const style = document.createElement('style');
-  style.id = 'flash-driver-css';
+  if (typeof document === 'undefined') return;
+  let style = document.getElementById('flash-driver-css');
+  if (!style) {
+    style = document.createElement('style');
+    style.id = 'flash-driver-css';
+    document.head.appendChild(style);
+  }
   style.textContent = CSS_DRIVER;
-  document.head.appendChild(style);
 }
 
 export async function lancerTourDriver(aller: (etape: Etape) => void, terminer: () => void) {
@@ -59,34 +113,56 @@ export async function lancerTourDriver(aller: (etape: Etape) => void, terminer: 
     terminer();
   };
   const steps: DriveStep[] = ETAPES_GUIDE.map((etape, index) => ({
-    element: `#${etape.id}`,
+    element: etape.id === 'tour-restitution'
+      ? () => cibleEtape(etape.id) ?? document.body
+      : `#${etape.id}`,
     waitForElement: 900,
     popover: {
       title: etape.titre,
       description: etape.texte,
       side: 'bottom',
-      align: 'start',
+      align: 'center',
       popoverClass: 'flash-tour',
       onNextClick: (_element, _step, opts) => {
         if (index >= ETAPES_GUIDE.length - 1) {
           opts.driver.destroy();
           return;
         }
-        aller(ETAPES_GUIDE[index + 1].etape);
-        opts.driver.moveNext();
+        const suivante = ETAPES_GUIDE[index + 1];
+        aller(suivante.etape);
+        window.setTimeout(() => {
+          montrerEtape(suivante.id);
+          opts.driver.moveNext();
+          window.setTimeout(() => {
+            opts.driver.refresh();
+            recadrerPopover();
+          }, 80);
+        }, 240);
       },
       onPrevClick: (_element, _step, opts) => {
         if (index === 0) return;
-        aller(ETAPES_GUIDE[index - 1].etape);
-        opts.driver.movePrevious();
+        const precedente = ETAPES_GUIDE[index - 1];
+        aller(precedente.etape);
+        window.setTimeout(() => {
+          montrerEtape(precedente.id);
+          opts.driver.movePrevious();
+          window.setTimeout(() => {
+            opts.driver.refresh();
+            recadrerPopover();
+          }, 80);
+        }, 240);
       },
+    },
+    onHighlighted: () => {
+      window.requestAnimationFrame(() => recadrerPopover());
     },
   }));
   const guide: Driver = driver({
-    animate: true,
+    animate: false,
     overlayOpacity: 0.45,
     stagePadding: 8,
-    stageRadius: 12,
+    stageRadius: 8,
+    popoverOffset: 12,
     showProgress: true,
     progressText: '{{current}} / {{total}}',
     nextBtnText: 'Suivant',
@@ -94,8 +170,15 @@ export async function lancerTourDriver(aller: (etape: Etape) => void, terminer: 
     doneBtnText: 'Terminer',
     waitForElement: 900,
     onDestroyed: () => cloturer(),
+    onHighlighted: () => {
+      window.requestAnimationFrame(() => recadrerPopover());
+    },
     steps,
   });
-  aller(1);
-  window.setTimeout(() => guide.drive(), 180);
+  aller(ETAPES_GUIDE[0].etape);
+  window.setTimeout(() => {
+    montrerEtape(ETAPES_GUIDE[0].id);
+    guide.drive();
+    window.setTimeout(() => recadrerPopover(), 120);
+  }, 180);
 }

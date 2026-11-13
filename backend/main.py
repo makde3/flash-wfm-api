@@ -100,7 +100,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ESSAI_JOURS = 3
+ESSAI_HEURES = 48
 _clients_jwks: Dict[str, jwt.PyJWKClient] = {}
 _client_service = None
 
@@ -321,12 +321,37 @@ def score_wape(reel, prevu):
         return None
     return float(np.abs(reel - prevu).sum() / denom * 100.0)
 
+def est_moyenne_mobile(modele: str) -> bool:
+    nom = " ".join(str(modele).strip().lower().replace("-", " ").split())
+    return nom in {"moyenne", "moyenne mobile", "mobile"} or "mobile" in nom
+
+def prevoir_moyenne_mobile(df, dates_futur):
+    travail = df.iloc[-28:].copy() if len(df) > 28 else df.copy()
+    volumes = travail["volume"].astype(float)
+    globale = float(volumes.mean()) if len(volumes) else 1.0
+    if not math.isfinite(globale) or globale < 0:
+        globale = 1.0
+    travail["jour_semaine"] = travail["date"].dt.dayofweek
+    moyennes = travail.groupby("jour_semaine")["volume"].mean().to_dict()
+    previsions = []
+    for jour in dates_futur:
+        try:
+            valeur = float(moyennes.get(int(jour.dayofweek), globale))
+        except (TypeError, ValueError):
+            valeur = globale
+        if not math.isfinite(valeur) or valeur < 0:
+            valeur = globale
+        previsions.append(valeur)
+    return previsions, "Moyenne mobile"
+
 def prevoir_volumes(df, dates_futur, modele_propre):
     df = df.copy()
     dates_futur = pd.DatetimeIndex(pd.to_datetime(dates_futur))
     nb = len(dates_futur)
     modele_propre = str(modele_propre).strip().lower()
     try:
+        if est_moyenne_mobile(modele_propre):
+            return prevoir_moyenne_mobile(df, dates_futur)
         if "holt" in modele_propre:
             try:
                 return entrainer_holt(df, dates_futur)
@@ -382,10 +407,6 @@ def wape_sur_historique(df, modele_propre):
         return None
     return round(score, 1)
 
-def modele_avance(modele: str) -> bool:
-    nom = modele.strip().lower()
-    return "holt" in nom or "light" in nom or "lgb" in nom
-
 def essai_expire(created_at) -> bool:
     if not created_at:
         return True
@@ -395,7 +416,7 @@ def essai_expire(created_at) -> bool:
         return True
     if debut.tzinfo is None:
         debut = debut.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) >= debut + timedelta(days=ESSAI_JOURS)
+    return datetime.now(timezone.utc) >= debut + timedelta(hours=ESSAI_HEURES)
 
 def url_projet_supabase() -> str:
     url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
@@ -477,7 +498,18 @@ def client_service():
     return _client_service
 
 def profil_libre(created_at: str | None = None) -> dict:
-    return {"plan": "free", "created_at": created_at or datetime.now(timezone.utc).isoformat()}
+    return {"plan": "free", "created_at": created_at}
+
+def date_creation_compte(user_id: str, profil: dict):
+    try:
+        reponse = client_service().auth.admin.get_user_by_id(user_id)
+        user = getattr(reponse, "user", None)
+        brut = getattr(user, "created_at", None) if user is not None else None
+        if brut:
+            return brut.isoformat() if hasattr(brut, "isoformat") else str(brut)
+    except Exception:
+        print("-> Date de creation du compte indisponible", flush=True)
+    return profil.get("created_at")
 
 def creer_profil_si_absent(user_id: str) -> None:
     try:
@@ -607,10 +639,11 @@ def entrainer_lightgbm(df, dates_futur):
 def verifier_droit_modele(modele: str, profil: dict, pro_actif: bool) -> None:
     if pro_actif or profil.get("plan") == "pro" or profil.get("role") == "admin":
         return
-    if modele_avance(modele):
-        raise HTTPException(status_code=403, detail="Ce modèle nécessite un abonnement Pro.")
-    if essai_expire(profil.get("created_at")):
-        raise HTTPException(status_code=403, detail="L'essai gratuit est expiré.")
+    if not essai_expire(profil.get("created_at")):
+        return
+    if est_moyenne_mobile(modele):
+        return
+    raise HTTPException(status_code=403, detail="Ce modèle nécessite un abonnement Pro.")
 
 def verifier_signature_stripe(corps: bytes, signature: str | None) -> dict:
     secret = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
@@ -1097,6 +1130,7 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
         raise HTTPException(status_code=400, detail="Fichier trop volumineux (5 000 lignes max)")
     user_id = identite_depuis_authorization(authorization)
     profil = lire_profil(user_id)
+    profil["created_at"] = date_creation_compte(user_id, profil)
     verifier_droit_modele(requete.modele, profil, abonnement_pro_actif(user_id))
 
     df = pd.DataFrame(requete.donnees)

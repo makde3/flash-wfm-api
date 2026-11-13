@@ -179,18 +179,21 @@ function etpDispoMoyenDe(planningVue: boolean, couvertures: LigneCouverture[] | 
 
 const AJUSTEMENTS_VIDES: Record<string, string> = {};
 
-const MODES_PREVISION: { id: 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride'; titre: string; sous?: string }[] = [
-  { id: 'Auto', titre: 'Auto (Recommandé)' },
-  { id: 'LightGBM', titre: 'IA & Machine Learning' },
+const MODELE_LIBRE = 'Moyenne mobile';
+
+const MODES_PREVISION: { id: 'Moyenne mobile' | 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride'; titre: string; sous?: string }[] = [
+  { id: 'Moyenne mobile', titre: 'Moyenne mobile' },
+  { id: 'Auto', titre: 'Recommandé (Auto)' },
   { id: 'Holt-Winters', titre: 'Saisonnalité & Tendances' },
-  { id: 'Hybride', titre: 'Modèle Hybride (Consensus)', sous: 'Fusion des modèles pour lisser les pics et réduire les risques.' },
+  { id: 'LightGBM', titre: 'IA & Machine Learning' },
+  { id: 'Hybride', titre: 'Modèle Hybride', sous: 'Fusion des modèles pour lisser les pics et réduire les risques.' },
 ];
 
 function libelleModele(modele: string | null) {
   return MODES_PREVISION.find((mode) => mode.id === modele)?.titre ?? '';
 }
 
-function modeleConnu(modele: string | null): modele is 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride' {
+function modeleConnu(modele: string | null): modele is 'Moyenne mobile' | 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride' {
   return MODES_PREVISION.some((mode) => mode.id === modele);
 }
 
@@ -295,10 +298,10 @@ function libelleCouverture(valeur: number | null) {
 }
 
 const POINTS_NOUVEAUTES: { icone: React.ComponentProps<typeof Ionicons>['name']; titre: string; texte: string }[] = [
-  { icone: 'bar-chart-outline', titre: 'Synthèse & Export Excel : ', texte: 'Comparez les modèles (IA vs Saisonnalité) et téléchargez la fiche A4 (.xlsx) en 1 clic.' },
-  { icone: 'flash-outline', titre: 'Flux Chaud vs Froid : ', texte: 'Adaptabilité automatique des paramètres et delais cibles (20s vs 24h) selon le canal.' },
-  { icone: 'bulb-outline', titre: 'Tunnel Épuré : ', texte: 'Saisie d\'ETP moyen directement sous le plan de prod pour simplifier le parcours.' },
-  { icone: 'chatbubble-ellipses-outline', titre: 'Bouton Feedback : ', texte: 'Transmettez vos retours ou signalez un bug directement depuis le header.' },
+  { icone: 'options-outline', titre: 'Ajustements événementiels (% métier)', texte: 'Appliquez des hausses ou des baisses manuelles par semaine ou par mois, directement sur le plan de production, avec recalcul de l’ETP.' },
+  { icone: 'bar-chart-outline', titre: 'Synthèse exécutive', texte: 'Ouverture par défaut sur la vue globale (toutes les files) et suivi comparatif du volume brut et du volume ajusté.' },
+  { icone: 'flash-outline', titre: 'Essai Pro 48 h', texte: 'Accès intégral à tous les moteurs IA / ML et aux exports dès la création du compte.' },
+  { icone: 'phone-portrait-outline', titre: 'Application installable', texte: 'Installez Flash WFM en un clic sur ordinateur ou mobile depuis le header.' },
 ];
 
 function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
@@ -306,19 +309,21 @@ function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
       <View style={styles.nouveauteVoile}>
         <View style={styles.nouveaute}>
-          <Text style={styles.nouveauteTitre}>Quoi de neuf dans Flash WFM ?</Text>
-          {POINTS_NOUVEAUTES.map((point) => (
-            <View key={point.titre} style={styles.nouveautePoint}>
-              <Ionicons name={point.icone} size={15} color="#1E293B" />
-              <Text style={styles.nouveauteTexte} numberOfLines={1}>
-                <Text style={styles.nouveauteFort}>{point.titre}</Text>
-                {point.texte}
-              </Text>
-            </View>
-          ))}
-          <TouchableOpacity style={styles.nouveauteBtn} onPress={onFermer}>
-            <Text style={styles.nouveauteBtnTexte}>C'est parti !</Text>
-          </TouchableOpacity>
+          <ScrollView style={styles.nouveauteScroll} contentContainerStyle={styles.nouveauteContenu} keyboardShouldPersistTaps="handled">
+            <Text style={styles.nouveauteTitre}>Nouveautés Flash WFM — Version Commerciale</Text>
+            {POINTS_NOUVEAUTES.map((point) => (
+              <View key={point.titre} style={styles.nouveautePoint}>
+                <Ionicons name={point.icone} size={18} color="#0F2D46" />
+                <Text style={styles.nouveauteTexte}>
+                  <Text style={styles.nouveauteFort}>{point.titre}. </Text>
+                  {point.texte}
+                </Text>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.nouveauteBtn} onPress={onFermer}>
+              <Text style={styles.nouveauteBtnTexte}>C'est parti !</Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -383,8 +388,10 @@ function ModaleFeedback({
 }
 
 const AVANTAGES_PRO = [
+  { titre: 'Modèles de prévision avancés', detail: 'Auto, saisonnalité, machine learning et modèle hybride, au-delà de la Moyenne mobile.' },
   { titre: 'Planning ETP réels', detail: 'Comparez le besoin calculé aux effectifs réellement présents, jour par jour.' },
-  { titre: 'Exports Excel & PowerPoint', detail: 'Emportez le plan de production et la synthèse exécutive pour les revues d’équipe.' },
+  { titre: 'Synthèse exécutive', detail: 'Comparez les modèles et préparez la revue d’équipe.' },
+  { titre: 'Exports Excel & PowerPoint', detail: 'Emportez le plan de production et la synthèse exécutive.' },
   { titre: 'Ajustements événementiels métier', detail: 'Intégrez soldes, campagnes ou incidents dans la prévision de volumes.' },
 ];
 
@@ -396,6 +403,7 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
   const [erreur, setErreur] = useState('');
   const [confirme, setConfirme] = useState(false);
   const [paiementOuvert, setPaiementOuvert] = useState(false);
+  const [stripeIndispo, setStripeIndispo] = useState(false);
 
   useEffect(() => {
     if (!visible) {
@@ -403,6 +411,7 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
       setConfirme(false);
       setEnvoi(false);
       setPaiementOuvert(false);
+      setStripeIndispo(false);
       return;
     }
     let actif = true;
@@ -416,22 +425,26 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
     };
   }, [visible]);
 
-  const activer = () => {
-    if (lienStripe) {
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        const onglet = window.open(lienStripe, '_blank', 'noopener,noreferrer');
+  const ouvrirPaiement = (url: string) => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (lienStripe) {
+        const onglet = window.open(url, '_blank', 'noopener,noreferrer');
         if (!onglet) {
           setErreur('Le navigateur a bloqué le nouvel onglet. Autorisez les pop-ups pour ouvrir le paiement.');
           setPaiementOuvert(false);
           return;
         }
       } else {
-        void Linking.openURL(lienStripe);
+        window.location.assign(url);
       }
-      setErreur('');
-      setPaiementOuvert(true);
-      return;
+    } else {
+      void Linking.openURL(url);
     }
+    setErreur('');
+    setPaiementOuvert(true);
+  };
+
+  const enregistrerDemande = () => {
     if (envoi || confirme) return;
     setEnvoi(true);
     setErreur('');
@@ -443,12 +456,49 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
       .finally(() => setEnvoi(false));
   };
 
+  const activer = () => {
+    if (lienStripe) {
+      ouvrirPaiement(lienStripe);
+      return;
+    }
+    if (stripeIndispo) {
+      enregistrerDemande();
+      return;
+    }
+    if (envoi) return;
+    setEnvoi(true);
+    setErreur('');
+    void (async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) {
+          setErreur('Veuillez vous reconnecter.');
+          return;
+        }
+        const data = await creerSessionCheckout(session.access_token);
+        if (typeof data?.url !== 'string' || !data.url) {
+          setStripeIndispo(true);
+          return;
+        }
+        ouvrirPaiement(data.url);
+      } catch (error) {
+        if (error instanceof ErreurApi && error.status === 503) {
+          setStripeIndispo(true);
+          return;
+        }
+        setErreur(error instanceof Error ? error.message : 'Impossible de joindre le serveur de paiement. Réessayez dans un instant.');
+      } finally {
+        setEnvoi(false);
+      }
+    })();
+  };
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={() => { if (!envoi) onFermer(); }}>
       <View style={styles.voile}>
         <View style={styles.modale}>
           <ScrollView style={styles.modaleScroll} contentContainerStyle={styles.modaleScrollContenu} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modaleTitre}>Passer en Pro</Text>
+            <Text style={styles.modaleTitre}>Activer mon accès Pro</Text>
             <Text style={styles.modaleLead}>Flash WFM Pro débloque le pilotage au plus près du terrain.</Text>
             {AVANTAGES_PRO.map((avantage) => (
               <View key={avantage.titre} style={styles.modalePoint}>
@@ -459,7 +509,7 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
                 </View>
               </View>
             ))}
-            {lienStripe ? null : confirme ? (
+            {lienStripe || !stripeIndispo ? null : confirme ? (
               <View style={styles.proConfirmation}>
                 <Text style={styles.proConfirmationTexte}>Demande enregistrée. MakConsult a bien reçu votre e-mail professionnel et le nom de votre entreprise. L’accès Pro sera activé après traitement.</Text>
               </View>
@@ -496,12 +546,13 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
             {erreur ? <Text style={styles.proErreur}>{erreur}</Text> : null}
             {paiementOuvert ? <Text style={styles.modaleLead}>Le paiement s’est ouvert dans un nouvel onglet.</Text> : null}
             {lienStripe && !paiementOuvert ? <Text style={styles.modaleLead}>Le paiement s’ouvre dans un nouvel onglet.</Text> : null}
+            {!lienStripe && !stripeIndispo && !paiementOuvert ? <Text style={styles.modaleLead}>Le paiement Stripe s’ouvre dans cet onglet.</Text> : null}
             {confirme ? null : (
               <TouchableOpacity style={[styles.uploadBtn, envoi && styles.generateBtnDisabled]} onPress={activer} disabled={envoi}>
                 {envoi ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.uploadBtnText}>Activer mon accès Pro</Text>}
               </TouchableOpacity>
             )}
-            {!lienStripe && !confirme ? <Text style={styles.modaleLead}>Dès l’envoi, la demande est enregistrée et confirmée à l’écran.</Text> : null}
+            {!lienStripe && stripeIndispo && !confirme ? <Text style={styles.modaleLead}>Dès l’envoi, la demande est enregistrée et confirmée à l’écran.</Text> : null}
             <TouchableOpacity style={styles.modaleFermer} onPress={onFermer} disabled={envoi}>
               <Text style={styles.resetText}>Fermer</Text>
             </TouchableOpacity>
@@ -547,7 +598,7 @@ function HeaderLogo({
   onReinitialiser: () => void;
   onFeedback: () => void;
 }) {
-  const { isPro } = useAuth();
+  const { isPro, hasProAccess, heuresEssaiRestantes } = useAuth();
   const installation = useInstallationPwa();
   const { width } = useWindowDimensions();
   const etroit = width < 760;
@@ -566,10 +617,16 @@ function HeaderLogo({
         </View>
       </View>
       <View style={[styles.headerActions, etroit && styles.headerActionsEtroit]}>
+        {!isPro && hasProAccess ? (
+          <View style={styles.essaiChip}>
+            <Ionicons name="hourglass-outline" size={14} color="#0F2D46" />
+            <Text style={styles.essaiTexte}>Essai Pro : {heuresEssaiRestantes}h restantes</Text>
+          </View>
+        ) : null}
         {!isPro ? (
           <TouchableOpacity style={styles.proHeaderBtn} onPress={onPasserPro}>
             <Ionicons name="flash" size={16} color="#0F2D46" />
-            <Text style={styles.proHeaderTexte}>Passer en Pro</Text>
+            <Text style={styles.proHeaderTexte}>Activer mon accès Pro</Text>
           </TouchableOpacity>
         ) : null}
         {installation.visible ? (
@@ -1241,7 +1298,6 @@ function ZoneImport({
   titre,
   detail,
   onFichier,
-  verrouille,
   onModele,
   onExemple,
 }: {
@@ -1254,7 +1310,6 @@ function ZoneImport({
   titre: string;
   detail: string;
   onFichier: () => void;
-  verrouille?: boolean;
   onModele?: () => void;
   onExemple?: () => void;
 }) {
@@ -1269,8 +1324,8 @@ function ZoneImport({
         </TouchableOpacity>
       </View>
       {mode === 'fichier' ? (
-        <TouchableOpacity style={[styles.dropZone, verrouille && styles.modelBtnLocked]} onPress={onFichier}>
-          <Ionicons name={verrouille ? 'lock-closed' : 'cloud-upload-outline'} size={28} color="#0F2D46" />
+        <TouchableOpacity style={styles.dropZone} onPress={onFichier}>
+          <Ionicons name="cloud-upload-outline" size={28} color="#0F2D46" />
           <Text style={styles.dropTitle}>{titre}</Text>
           <Text style={styles.dropDetail}>{detail}</Text>
         </TouchableOpacity>
@@ -1288,12 +1343,9 @@ function ZoneImport({
             editable={!enCours}
           />
           <Text style={styles.hint}>Le document doit être accessible en lecture avec le lien de partage.</Text>
-          <TouchableOpacity style={[styles.nextBtn, enCours && styles.generateBtnDisabled, verrouille && styles.modelBtnLocked]} onPress={onValider} disabled={enCours}>
+          <TouchableOpacity style={[styles.nextBtn, enCours && styles.generateBtnDisabled]} onPress={onValider} disabled={enCours}>
             {enCours ? <ActivityIndicator color="#FFFFFF" /> : (
-              <View style={styles.boutonLigne}>
-                {verrouille ? <Ionicons name="lock-closed" size={16} color="#FFFFFF" /> : null}
-                <Text style={styles.nextBtnText}>Importer le lien</Text>
-              </View>
+              <Text style={styles.nextBtnText}>Importer le lien</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -1306,11 +1358,8 @@ function ZoneImport({
             </TouchableOpacity>
           ) : null}
           {onExemple ? (
-            <TouchableOpacity style={[styles.exempleBtn, verrouille && styles.modelBtnLocked]} onPress={onExemple}>
-              <View style={styles.boutonLigne}>
-                {verrouille ? <Ionicons name="lock-closed" size={14} color="#0F2D46" /> : null}
-                <Text style={styles.exempleBtnText}>Charger des données d'exemple</Text>
-              </View>
+            <TouchableOpacity style={styles.exempleBtn} onPress={onExemple}>
+              <Text style={styles.exempleBtnText}>Charger des données d'exemple</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -1350,13 +1399,15 @@ export default function FlashWFM() {
   const [ajustementsOuverts, setAjustementsOuverts] = useState(false);
   const [ajustementsSaisis, setAjustementsSaisis] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
-  const { userId, isPro, abonnementActif, assurerDroits } = useAuth();
+  const { userId, hasProAccess, abonnementActif, assurerDroits, profile } = useAuth();
+  const proVerrouille = profile != null && !hasProAccess;
   const [modalePro, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [nouveautesOuvertes, setNouveautesOuvertes] = useState(false);
   const [tourIndex, setTourIndex] = useState<number | null>(null);
+  const tourId = tourIndex == null ? null : ETAPES_GUIDE[tourIndex]?.id ?? null;
   const [feedbackOuvert, setFeedbackOuvert] = useState(false);
   const [typeRetour, setTypeRetour] = useState<TypeRetour>(TYPES_RETOUR[0]);
   const [messageRetour, setMessageRetour] = useState('');
@@ -1381,13 +1432,13 @@ export default function FlashWFM() {
     () => planDuSkill(skillCourant, plansParSkill, plans, horizon),
     [skillCourant, plansParSkill, plans, horizon],
   );
-  const ajustementsActifs = isPro && ajustementsOuverts;
+  const ajustementsActifs = hasProAccess && ajustementsOuverts;
   const saisiesAjustement = ajustementsActifs ? ajustementsSaisis : AJUSTEMENTS_VIDES;
   const planAjuste = useMemo(
     () => (plan ? appliquerAjustements(plan, saisiesAjustement) : null),
     [plan, saisiesAjustement],
   );
-  const planningActif = isPro && etpStatut === 'valide' && !!etpPlanning?.length;
+  const planningActif = hasProAccess && etpStatut === 'valide' && !!etpPlanning?.length;
   const dmtFichier = useMemo(() => dmtPondere(series), [series]);
   const etpSaisieVue = useMemo(
     () => etpSaisiDuSkill(skillCourant, multi, series, ciblesSkills, etpMoyensAppliques),
@@ -1397,9 +1448,9 @@ export default function FlashWFM() {
   const couvertures = useMemo(() => {
     if (!planAjuste) return null;
     if (planningVue) return couverturesDuPlan(planAjuste, etpPlanning, null);
-    if (!isPro) return null;
+    if (!hasProAccess) return null;
     return couverturesDuPlan(planAjuste, null, etpSaisieVue);
-  }, [planAjuste, planningVue, etpPlanning, isPro, etpSaisieVue]);
+  }, [planAjuste, planningVue, etpPlanning, hasProAccess, etpSaisieVue]);
   const periodesSansEtp = !!couvertures && planningVue && couvertures.some((ligne) => ligne.etpDispo == null);
   const socleCibles = useMemo(() => ({
     aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures,
@@ -1420,7 +1471,7 @@ export default function FlashWFM() {
       ? null
       : avecPlanning
         ? couverturesDuPlan(planCible, etpPlanning, null)
-        : isPro
+        : hasProAccess
           ? couverturesDuPlan(planCible, null, etpSaisie)
           : null;
     return {
@@ -1431,7 +1482,7 @@ export default function FlashWFM() {
       holt: vueDesPlans(comparatif?.holt ?? null, skillSyntheseCourant),
       light: vueDesPlans(comparatif?.light ?? null, skillSyntheseCourant),
     };
-  }, [skillSyntheseCourant, plansParSkill, plans, horizon, multi, series, ciblesSkills, etpMoyensAppliques, planningActif, etpPlanning, isPro, socleCibles, comparatif]);
+  }, [skillSyntheseCourant, plansParSkill, plans, horizon, multi, series, ciblesSkills, etpMoyensAppliques, planningActif, etpPlanning, hasProAccess, socleCibles, comparatif]);
 
   const appliquerVierge = useCallback(() => {
     setCurrentStep(1);
@@ -1495,6 +1546,11 @@ export default function FlashWFM() {
     setEtpMoyens(cache.etpMoyens);
     setEtpMoyensAppliques(cache.etpMoyensAppliques);
   }, []);
+
+  useEffect(() => {
+    if (!profile || hasProAccess) return;
+    if (selectedModel !== MODELE_LIBRE) setSelectedModel(MODELE_LIBRE);
+  }, [profile, hasProAccess, selectedModel]);
 
   useEffect(() => {
     if (currentStep === 4) setSkillSynthese(VUE_GLOBALE);
@@ -1702,7 +1758,7 @@ export default function FlashWFM() {
   };
 
   const chargerExempleEtp = () => {
-    if (!isPro) {
+    if (proVerrouille) {
       setModalePro(true);
       return;
     }
@@ -1866,7 +1922,7 @@ export default function FlashWFM() {
   };
 
   const importerEtpLien = async () => {
-    if (!isPro) {
+    if (proVerrouille) {
       setModalePro(true);
       return;
     }
@@ -1897,7 +1953,7 @@ export default function FlashWFM() {
   };
 
   const pickEtp = async () => {
-    if (!isPro) {
+    if (proVerrouille) {
       setModalePro(true);
       return;
     }
@@ -1924,7 +1980,7 @@ export default function FlashWFM() {
   };
 
   const validerEtp = () => {
-    if (!isPro) {
+    if (proVerrouille) {
       setModalePro(true);
       return;
     }
@@ -2093,7 +2149,8 @@ export default function FlashWFM() {
   const handleGenerate = async () => {
     if (loading) return;
     assurerDroits();
-    const modeleChoisi = modeleConnu(selectedModel) ? selectedModel : (__DEV__ ? 'Auto' : null);
+    const connu = modeleConnu(selectedModel) ? selectedModel : null;
+    const modeleChoisi = connu && (proVerrouille && connu !== MODELE_LIBRE) ? MODELE_LIBRE : connu ?? (proVerrouille ? MODELE_LIBRE : (__DEV__ ? 'Auto' : null));
     if (!modeleChoisi) {
       alert('Veuillez sélectionner un algorithme de prévision.');
       return;
@@ -2216,7 +2273,7 @@ export default function FlashWFM() {
   };
 
   const handleExport = () => {
-    if (!isPro) {
+    if (proVerrouille) {
       setModalePro(true);
       return;
     }
@@ -2240,7 +2297,7 @@ export default function FlashWFM() {
   };
 
   const calculerMoyens = () => {
-    if (!isPro) {
+    if (proVerrouille) {
       setModalePro(true);
       return;
     }
@@ -2271,7 +2328,7 @@ export default function FlashWFM() {
         avancer(3);
         return;
       }
-      if (etpBrouillon?.length && isPro) {
+      if (etpBrouillon?.length && !proVerrouille) {
         validerEtp();
         return;
       }
@@ -2314,7 +2371,7 @@ export default function FlashWFM() {
             <View style={styles.card}>
               <Text style={styles.stepText}>Étape 1 : Import historique</Text>
               <Text style={styles.lead}>Historique de volumes et de DMT. Colonnes attendues : Date et Volume. Une colonne Skill, File ou Activité est optionnelle : sans elle, tout l'historique est rattaché à la file Général. La DMT peut occuper une colonne dédiée.</Text>
-              <View nativeID="tour-source" style={tourIndex === 0 ? styles.tourCible : undefined}>
+              <View nativeID="tour-source" style={tourId === 'tour-source' ? styles.tourCible : undefined}>
                 <ZoneImport
                   mode={sourceHistorique}
                   onMode={setSourceHistorique}
@@ -2345,11 +2402,10 @@ export default function FlashWFM() {
           ) : null}
 
           {currentStep === 2 ? (
-            <View nativeID="tour-etp" style={[styles.panel, tourIndex === 1 && styles.tourCible]}>
+            <View nativeID="tour-etp" style={[styles.panel, tourId === 'tour-etp' && styles.tourCible]}>
               <View style={styles.titleRow}>
                 <Text style={[styles.panelTitle, styles.panelTitleInline]}>Étape 2 : Planning ETP réels</Text>
-                {!isPro ? <Ionicons name="lock-closed" size={16} color="#0F2D46" /> : null}
-                <Text style={styles.proBadge}>Pro</Text>
+                {proVerrouille ? <Text style={styles.proBadge}>PRO</Text> : null}
               </View>
               <ZoneImport
                 mode={sourceEtp}
@@ -2361,7 +2417,6 @@ export default function FlashWFM() {
                 titre="Importer un planning d'ETP jour par jour (.xlsx)"
                 detail="Colonne 1 = date, colonne 2 = ETP. Court terme : jour par jour. Long terme : moyenne du mois."
                 onFichier={() => { void pickEtp(); }}
-                verrouille={!isPro}
                 onModele={telechargerModeleEtp}
                 onExemple={chargerExempleEtp}
               />
@@ -2379,11 +2434,8 @@ export default function FlashWFM() {
               ) : null}
               <View style={styles.actionRow}>
                 {etpBrouillon?.length ? (
-                  <TouchableOpacity style={[styles.nextBtn, styles.actionBtn, !isPro && styles.modelBtnLocked]} onPress={validerEtp}>
-                    <View style={styles.boutonLigne}>
-                      {!isPro ? <Ionicons name="lock-closed" size={16} color="#FFFFFF" /> : null}
-                      <Text style={styles.nextBtnText}>Valider</Text>
-                    </View>
+                  <TouchableOpacity style={[styles.nextBtn, styles.actionBtn]} onPress={validerEtp}>
+                    <Text style={styles.nextBtnText}>Valider</Text>
                   </TouchableOpacity>
                 ) : null}
                 <TouchableOpacity style={[styles.secondaryBtn, styles.actionBtn]} onPress={passerEtp}>
@@ -2406,7 +2458,7 @@ export default function FlashWFM() {
                   <Text style={[styles.fluxDetail, typeFlux === 'froid' && styles.fluxDetailOn]}>Calculs basés sur un modèle linéaire.</Text>
                 </TouchableOpacity>
               </View>
-              <View nativeID="tour-leviers" style={tourIndex === 2 ? styles.tourCible : undefined}>
+              <View nativeID="tour-leviers" style={tourId === 'tour-leviers' ? styles.tourCible : undefined}>
               <View style={styles.fluxMessageLigne}>
                 <Ionicons name={typeFlux === 'chaud' ? 'flash-outline' : 'mail-outline'} size={16} color="#1E293B" />
                 <Text style={styles.fluxMessage}>
@@ -2485,7 +2537,7 @@ export default function FlashWFM() {
           ) : null}
 
           {currentStep === 4 ? (
-            <View nativeID="tour-bilan" style={[styles.panel, tourIndex === 3 && styles.tourCible]}>
+            <View nativeID="tour-bilan" style={styles.panel}>
               <Text style={styles.panelTitle}>Étape 4 : Restitution et horizon</Text>
               <View style={styles.horizonRow}>
                 <TouchableOpacity style={[styles.horizonBtn, horizon === 'court_terme' && styles.modelBtnActive]} onPress={() => setHorizon('court_terme')}>
@@ -2497,27 +2549,32 @@ export default function FlashWFM() {
               </View>
               <Text style={styles.hint}>Court terme : 30 jours. Long terme : 12 mois. Le modèle sert à projeter les volumes avant le calcul d’ETP.</Text>
 
-              <View style={styles.modelRow}>
+              <View nativeID="tour-modeles" style={[styles.modelRow, tourId === 'tour-modeles' && styles.tourCible]}>
                 {MODES_PREVISION.map((mode) => {
                   const actif = selectedModel === mode.id;
+                  const reserve = mode.id !== MODELE_LIBRE && proVerrouille;
                   return (
                     <TouchableOpacity
                       key={mode.id}
                       style={[styles.modelBtn, styles.modelBtnDash, styles.modelBtnPile, actif && styles.modelBtnActive]}
-                      onPress={() => choisirModele(mode.id, true)}
+                      onPress={() => choisirModele(mode.id, !reserve)}
                     >
                       <View style={styles.modelBtnTitre}>
                         <Text style={[styles.modelBtnText, actif && styles.modelBtnTextActive]}>{mode.titre}</Text>
+                        {reserve ? <Text style={styles.proBadge}>PRO</Text> : null}
                       </View>
                       {mode.sous ? <Text style={[styles.modelBtnSous, actif && styles.modelBtnSousActif]}>{mode.sous}</Text> : null}
                     </TouchableOpacity>
                   );
                 })}
               </View>
+              {proVerrouille ? <Text style={styles.hint}>Sans accès Pro, le plan est calculé avec la Moyenne mobile.</Text> : null}
 
+              <View nativeID="tour-generer" style={tourId === 'tour-restitution' && !plan ? styles.tourCible : undefined}>
               <TouchableOpacity style={[styles.generateBtn, loading && styles.generateBtnDisabled]} onPress={handleGenerate} disabled={loading}>
                 {loading ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.generateBtnText}>{plan ? 'Recalculer le plan de production' : 'Générer le plan de production'}</Text>}
               </TouchableOpacity>
+              </View>
 
               {multi ? (
                 <View style={styles.skillBloc}>
@@ -2562,29 +2619,40 @@ export default function FlashWFM() {
                     </View>
                   </View>
                   <CombinedChart points={(planAjuste ?? plan).map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
-                  <View style={styles.planHeader}>
+                  <View nativeID="tour-plan" style={[styles.planHeader, tourId === 'tour-restitution' && styles.tourCible]}>
                     <Text style={styles.planHeaderTitle}>Plan de production</Text>
                     <View style={styles.planActions}>
                       <TouchableOpacity
-                        style={[styles.ajustToggle, ajustementsOuverts && styles.ajustToggleOn, !isPro && styles.modelBtnLocked]}
+                        style={[styles.ajustToggle, ajustementsOuverts && hasProAccess && styles.ajustToggleOn]}
                         onPress={() => {
-                          if (!isPro) {
+                          if (proVerrouille) {
                             setModalePro(true);
                             return;
                           }
                           setAjustementsOuverts((ouvert) => !ouvert);
                         }}
                       >
-                        <Ionicons name={!isPro ? 'lock-closed' : 'options-outline'} size={16} color={ajustementsOuverts && isPro ? '#F8FAFC' : '#0F2D46'} />
-                        <Text style={[styles.ajustToggleTexte, ajustementsOuverts && isPro && styles.ajustToggleTexteOn]}>Ajustements événementiels (% métier)</Text>
+                        <Ionicons name="options-outline" size={16} color={ajustementsOuverts && hasProAccess ? '#F8FAFC' : '#0F2D46'} />
+                        <Text style={[styles.ajustToggleTexte, ajustementsOuverts && hasProAccess && styles.ajustToggleTexteOn]}>Ajustements événementiels (% métier)</Text>
+                        {!proVerrouille ? null : <Text style={styles.proBadge}>PRO</Text>}
                       </TouchableOpacity>
-                      <TouchableOpacity style={styles.syntheseBtn} onPress={() => { void ouvrirSynthese(); }}>
+                      <TouchableOpacity
+                        style={styles.syntheseBtn}
+                        onPress={() => {
+                          if (proVerrouille) {
+                            setModalePro(true);
+                            return;
+                          }
+                          void ouvrirSynthese();
+                        }}
+                      >
                         <Ionicons name="bar-chart-outline" size={16} color="#F4C430" />
-                        <Text style={styles.syntheseBtnText}>Synthèse & Comparatif</Text>
+                        <Text style={styles.syntheseBtnText}>Synthèse exécutive</Text>
+                        {!proVerrouille ? null : <Text style={styles.proBadge}>PRO</Text>}
                       </TouchableOpacity>
-                      <TouchableOpacity style={[styles.exportBtn, !isPro && styles.modelBtnLocked]} onPress={handleExport}>
-                        {!isPro ? <Ionicons name="lock-closed" size={16} color="#0F2D46" /> : null}
+                      <TouchableOpacity style={styles.exportBtn} onPress={handleExport}>
                         <Text style={styles.exportBtnText}>Exporter en Excel</Text>
+                        {!proVerrouille ? null : <Text style={styles.proBadge}>PRO</Text>}
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -2604,7 +2672,7 @@ export default function FlashWFM() {
                     <View style={styles.ajustBloc}>
                       <View style={styles.titleRow}>
                         <Text style={styles.ajustTitre}>Ajuster ETP dispo</Text>
-                        {!isPro ? <Text style={styles.proBadge}>Pro</Text> : null}
+                        {!proVerrouille ? null : <Text style={styles.proBadge}>PRO</Text>}
                       </View>
                       <Text style={styles.hint}>Sans planning importé, un effectif moyen est appliqué à chaque période du tableau.</Text>
                       <View style={styles.ajustRow}>
@@ -2664,7 +2732,7 @@ export default function FlashWFM() {
         holt={cadreSynthese.holt}
         light={cadreSynthese.light}
         pourcentages={saisiesAjustement}
-        exportsVerrouilles={!isPro}
+        exportsVerrouilles={proVerrouille}
         onExportsVerrouilles={() => setModalePro(true)}
       />
       <ModalePro visible={modalePro} onFermer={() => setModalePro(false)} />
@@ -2730,14 +2798,15 @@ const styles = StyleSheet.create({
   logoutText: { color: '#0F2D46', fontSize: 12, fontWeight: '700' },
   voile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   modale: { width: '100%', maxWidth: 560, maxHeight: '88%', backgroundColor: '#FFFFFF', borderRadius: 8, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
-  nouveauteVoile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 12 },
-  nouveaute: { width: '100%', maxWidth: 640, backgroundColor: '#FFFFFF', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 10, gap: 4, borderWidth: 1, borderColor: '#E2E8F0' },
-  nouveauteTitre: { fontSize: 15, fontWeight: '600', color: '#0F2D46', marginBottom: 2 },
-  nouveautePoint: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  nouveautePuce: { fontSize: 12, lineHeight: 15 },
-  nouveauteTexte: { flex: 1, color: '#0F2D46', fontSize: 10.5, lineHeight: 14 },
-  nouveauteFort: { fontWeight: '600' },
-  nouveauteBtn: { backgroundColor: '#F4C430', borderRadius: 8, paddingVertical: 8, alignItems: 'center', marginTop: 4 },
+  nouveauteVoile: { flex: 1, backgroundColor: 'rgba(15, 45, 70, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 16 },
+  nouveaute: { width: '100%', maxWidth: 520, maxHeight: '88%', backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', borderTopWidth: 4, borderTopColor: '#F4C430' },
+  nouveauteScroll: { flexGrow: 0 },
+  nouveauteContenu: { padding: 24, gap: 12 },
+  nouveauteTitre: { fontSize: 20, fontWeight: '600', color: '#0F2D46' },
+  nouveautePoint: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  nouveauteTexte: { flex: 1, color: '#1E293B', fontSize: 14, lineHeight: 20 },
+  nouveauteFort: { color: '#0F2D46', fontWeight: '600' },
+  nouveauteBtn: { backgroundColor: '#F4C430', borderRadius: 8, minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   nouveauteBtnTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
   modaleTitre: { fontSize: 20, fontWeight: '600', color: '#0F2D46' },
   modaleLead: { color: '#687581', fontSize: 14, lineHeight: 20 },
@@ -2809,14 +2878,13 @@ const styles = StyleSheet.create({
   modelBtnTitre: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   modelBtnSous: { color: '#64748B', fontSize: 12, fontWeight: '500', lineHeight: 16, textAlign: 'center' },
   modelBtnSousActif: { color: '#E2E8F0' },
-  modelBtnLocked: { opacity: 0.55 },
-  proBadge: { backgroundColor: '#F4C430', color: '#0F2D46', fontSize: 11, fontWeight: '600', overflow: 'hidden', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
   modalBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15, 45, 70, 0.45)', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 20 },
   modalCard: { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 24, width: '100%', maxWidth: 420 },
   modalTitle: { color: '#0F2D46', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 16 },
   modelBtnActive: { backgroundColor: '#0F2D46', borderColor: '#0F2D46' },
   modelBtnText: { color: '#0F2D46', fontWeight: '600', fontSize: 14, textAlign: 'center' },
   modelBtnTextActive: { color: '#F4C430', fontWeight: '600' },
+  proBadge: { backgroundColor: '#F4C430', color: '#0F2D46', fontSize: 11, fontWeight: '600', overflow: 'hidden', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
   generateBtn: { marginTop: 10, backgroundColor: '#7FC8C0', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', minHeight: 40 },
   generateBtnDisabled: { opacity: 0.7 },
   generateBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '600', textAlign: 'center' },
@@ -2852,6 +2920,8 @@ const styles = StyleSheet.create({
   exportBtn: { backgroundColor: '#F4C430', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 8 },
   proHeaderBtn: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, backgroundColor: '#F4C430', flexDirection: 'row', alignItems: 'center', gap: 8 },
   proHeaderTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  essaiChip: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#FFF8E1', borderWidth: 1, borderColor: '#F4C430', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  essaiTexte: { color: '#0F2D46', fontSize: 13, fontWeight: '600' },
   installBtn: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', gap: 8 },
   installBtnTexte: { color: '#0F2D46', fontSize: 14, fontWeight: '600' },
   installEtape: { color: '#1E293B', fontSize: 14, lineHeight: 20 },
