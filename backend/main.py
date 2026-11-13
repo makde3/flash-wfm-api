@@ -139,33 +139,52 @@ class PrevisionRequest(BaseModel):
     skill_configs: Dict[str, SkillConfigPayload] | None = None
 
 def calcul_erlang_c(agents, traffic):
-    if agents <= traffic:
+    if not math.isfinite(agents) or not math.isfinite(traffic) or agents <= 0 or traffic < 0 or agents <= traffic:
         return 1.0
     erlang_b = 1.0
     for i in range(1, int(agents) + 1):
-        erlang_b = (traffic * erlang_b) / (i + traffic * erlang_b)
-    erlang_c = erlang_b / (1 - (traffic / agents) * (1 - erlang_b))
-    return erlang_c
+        denominateur = i + traffic * erlang_b
+        if denominateur == 0 or not math.isfinite(denominateur):
+            return 1.0
+        erlang_b = (traffic * erlang_b) / denominateur
+    reste = 1 - (traffic / agents) * (1 - erlang_b)
+    if reste <= 0 or not math.isfinite(reste) or not math.isfinite(erlang_b):
+        return 1.0
+    return min(1.0, max(0.0, erlang_b / reste))
 
 def calculer_etp_pour_volume(volume, req: ErlangRequest):
-    if req.aht <= 0 or req.heures_ouverture <= 0 or req.shrinkage >= 100:
+    if req.aht <= 0 or req.heures_ouverture <= 0 or req.shrinkage >= 100 or req.shrinkage < 0:
+        return 1
+    if not math.isfinite(volume) or volume <= 0:
         return 1
 
-    sla_cible = 99.9 if req.sla_cible >= 100 else req.sla_cible
+    sla_cible = 99.9 if req.sla_cible >= 100 else max(0, req.sla_cible)
     volume_horaire_estime = volume / req.heures_ouverture
     traffic = (volume_horaire_estime * req.aht) / 3600.0
+    if not math.isfinite(traffic) or traffic < 0:
+        return 1
+    delai = max(0, req.temps_cible)
 
     for agents in range(1, 1001):
         pw = calcul_erlang_c(agents, traffic)
-        sla_calcule = 1 - pw * math.exp(-(agents - traffic) * (req.temps_cible / req.aht))
-        if sla_calcule >= (sla_cible / 100.0):
-            return math.ceil(agents / (1 - (req.shrinkage / 100.0)))
+        exposant = -(agents - traffic) * (delai / req.aht)
+        if not math.isfinite(exposant) or exposant > 700:
+            continue
+        try:
+            sla_calcule = 1 - pw * math.exp(exposant)
+        except OverflowError:
+            continue
+        if math.isfinite(sla_calcule) and sla_calcule >= (sla_cible / 100.0):
+            productivite = 1 - (req.shrinkage / 100.0)
+            if productivite <= 0:
+                return 1
+            return math.ceil(agents / productivite)
 
     return 1000
 
 def calculer_etp_ticketing(volume, req: ErlangRequest, inclure_backlog: bool = False):
     aht_heures = req.aht / 3600.0
-    backlog = req.backlog if inclure_backlog else 0
+    backlog = max(0, req.backlog) if inclure_backlog else 0
     charge_heures = (volume + backlog) * aht_heures
 
     if req.heures_travaillees is not None and req.heures_travaillees > 0:
@@ -267,11 +286,12 @@ def prevoir_double_saisonnalite(dates, volumes, dates_futur):
     historique['mois'] = historique['date'].dt.month
     facteur_semaine = (historique.groupby('jour_semaine')['volume'].mean() / moyenne).to_dict()
     facteur_mois = (historique.groupby('mois')['volume'].mean() / moyenne).to_dict()
-    facteur = [
+    facteur = np.array([
         facteur_semaine.get(jour, 1.0) * facteur_mois.get(mois, 1.0)
         for jour, mois in zip(historique['jour_semaine'], historique['mois'])
-    ]
-    deseason = historique['volume'].to_numpy(dtype=float) / np.array(facteur, dtype=float)
+    ], dtype=float)
+    facteur = np.where(np.isfinite(facteur) & (np.abs(facteur) >= 1e-9), facteur, 1.0)
+    deseason = historique['volume'].to_numpy(dtype=float) / facteur
     if len(historique) >= 2:
         pente, origine = np.polyfit(np.arange(len(historique), dtype=float), deseason, 1)
     else:
@@ -565,7 +585,9 @@ def entrainer_lightgbm(df, dates_futur):
     df = df.copy()
     df['jour_semaine'] = df['date'].dt.dayofweek
     df['mois'] = df['date'].dt.month
-    moyenne_globale = df['volume'].mean()
+    moyenne_globale = float(df['volume'].mean())
+    if not math.isfinite(moyenne_globale) or moyenne_globale == 0:
+        moyenne_globale = 1.0
     facteur_semaine = (df.groupby('jour_semaine')['volume'].mean() / moyenne_globale).to_dict()
     facteur_mois = (df.groupby('mois')['volume'].mean() / moyenne_globale).to_dict()
     X = features_temporelles(df['date'])

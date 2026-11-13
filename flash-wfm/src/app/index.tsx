@@ -549,21 +549,23 @@ function HeaderLogo({
 }) {
   const { isPro } = useAuth();
   const installation = useInstallationPwa();
+  const { width } = useWindowDimensions();
+  const etroit = width < 760;
   return (
     <View style={styles.headerContainer}>
-      <View style={styles.headerBrand}>
+      <View style={[styles.headerBrand, etroit && styles.headerBrandEtroit]}>
         <View style={styles.logoBadge}>
           <Ionicons name="flash" size={28} color="#F4C430" />
         </View>
         <View style={styles.headerTextContainer}>
-          <Text style={styles.brandTitle}>
+          <Text style={[styles.brandTitle, etroit && styles.brandTitleEtroit]}>
             FLASH <Text style={styles.brandTitleSub}>WFM</Text>
           </Text>
           <Text style={styles.brandByline}>by MakConsult</Text>
           <Text style={styles.brandSubtitle}>DATA · MÉTIER · PERFORMANCE</Text>
         </View>
       </View>
-      <View style={styles.headerActions}>
+      <View style={[styles.headerActions, etroit && styles.headerActionsEtroit]}>
         {!isPro ? (
           <TouchableOpacity style={styles.proHeaderBtn} onPress={onPasserPro}>
             <Ionicons name="flash" size={16} color="#0F2D46" />
@@ -1199,10 +1201,21 @@ async function postApi(path: string, body: unknown, timeoutMs = 5000, token: str
 
 async function lireFeuille(uri: string) {
   const response = await fetch(uri);
+  if (!response.ok) throw new Error('Impossible de lire ce fichier.');
   const arrayBuffer = await response.arrayBuffer();
-  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-  const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(worksheet) as Record<string, unknown>[];
+  if (!arrayBuffer.byteLength) throw new Error('Le fichier est vide.');
+  let workbook: ReturnType<typeof XLSX.read>;
+  try {
+    workbook = XLSX.read(arrayBuffer, { type: 'array' });
+  } catch {
+    throw new Error('Format invalide. Le fichier doit être un CSV ou un classeur Excel (.xlsx).');
+  }
+  const nom = workbook.SheetNames[0];
+  const worksheet = nom ? workbook.Sheets[nom] : undefined;
+  if (!worksheet) throw new Error('Le classeur ne contient aucune feuille.');
+  const lignes = XLSX.utils.sheet_to_json(worksheet) as Record<string, unknown>[];
+  if (!lignes.length) throw new Error('Le fichier est vide ou ne contient pas de tableau exploitable.');
+  return lignes;
 }
 
 type SourceImport = 'fichier' | 'lien';
@@ -1368,7 +1381,8 @@ export default function FlashWFM() {
     () => planDuSkill(skillCourant, plansParSkill, plans, horizon),
     [skillCourant, plansParSkill, plans, horizon],
   );
-  const saisiesAjustement = ajustementsOuverts ? ajustementsSaisis : AJUSTEMENTS_VIDES;
+  const ajustementsActifs = isPro && ajustementsOuverts;
+  const saisiesAjustement = ajustementsActifs ? ajustementsSaisis : AJUSTEMENTS_VIDES;
   const planAjuste = useMemo(
     () => (plan ? appliquerAjustements(plan, saisiesAjustement) : null),
     [plan, saisiesAjustement],
@@ -1813,7 +1827,7 @@ export default function FlashWFM() {
     } catch (error) {
       console.error(error);
       setDataPreview(null);
-      alert('Erreur lors de la lecture du fichier Excel.');
+      alert(error instanceof Error ? error.message : 'Erreur lors de la lecture du fichier Excel.');
     }
   };
 
@@ -1905,7 +1919,7 @@ export default function FlashWFM() {
       setEtpStatut('vide');
     } catch (error) {
       console.error(error);
-      alert('Erreur lors de la lecture du planning ETP.');
+      alert(error instanceof Error ? error.message : 'Erreur lors de la lecture du planning ETP.');
     }
   };
 
@@ -2082,10 +2096,6 @@ export default function FlashWFM() {
     const modeleChoisi = modeleConnu(selectedModel) ? selectedModel : (__DEV__ ? 'Auto' : null);
     if (!modeleChoisi) {
       alert('Veuillez sélectionner un algorithme de prévision.');
-      return;
-    }
-    if (!isPro) {
-      setModalePro(true);
       return;
     }
     if (dataPreview && !series.length) {
@@ -2489,16 +2499,15 @@ export default function FlashWFM() {
 
               <View style={styles.modelRow}>
                 {MODES_PREVISION.map((mode) => {
-                  const actif = isPro && selectedModel === mode.id;
+                  const actif = selectedModel === mode.id;
                   return (
                     <TouchableOpacity
                       key={mode.id}
-                      style={[styles.modelBtn, styles.modelBtnDash, styles.modelBtnPile, !isPro && styles.modelBtnLocked, actif && styles.modelBtnActive]}
-                      onPress={() => choisirModele(mode.id, isPro)}
+                      style={[styles.modelBtn, styles.modelBtnDash, styles.modelBtnPile, actif && styles.modelBtnActive]}
+                      onPress={() => choisirModele(mode.id, true)}
                     >
                       <View style={styles.modelBtnTitre}>
                         <Text style={[styles.modelBtnText, actif && styles.modelBtnTextActive]}>{mode.titre}</Text>
-                        {!isPro ? <Text style={styles.proBadge}>Pro</Text> : null}
                       </View>
                       {mode.sous ? <Text style={[styles.modelBtnSous, actif && styles.modelBtnSousActif]}>{mode.sous}</Text> : null}
                     </TouchableOpacity>
@@ -2533,7 +2542,7 @@ export default function FlashWFM() {
                 <View style={styles.resultat}>
                   <View style={styles.statsRow}>
                     <View style={styles.statCard}>
-                      <Text style={styles.statLabel}>{ajustementsOuverts ? 'Volume ajusté' : 'Volume prévu'}</Text>
+                      <Text style={styles.statLabel}>{ajustementsActifs ? 'Volume ajusté' : 'Volume prévu'}</Text>
                       <Text style={styles.statValue}>{volumeTotal.toLocaleString('fr-FR')}</Text>
                     </View>
                     <View style={styles.statCard}>
@@ -2582,14 +2591,14 @@ export default function FlashWFM() {
                   {planningVue ? <Text style={styles.hint}>Écart et couverture calculés à partir du planning ETP importé.</Text> : null}
                   {multi && planningActif && skillCourant !== VUE_GLOBALE ? <Text style={styles.hint}>Cette file utilise l'ETP saisi ci-dessus. La vue globale conserve le planning jour par jour.</Text> : null}
                   {periodesSansEtp ? <Text style={styles.hint}>Certaines périodes du plan n’ont pas de correspondance dans le fichier ETP.</Text> : null}
-                  {ajustementsOuverts ? (
+                  {ajustementsActifs ? (
                     <GrilleAjustements
                       plan={plan}
                       saisies={ajustementsSaisis}
                       onSaisie={(cle, texte) => setAjustementsSaisis((actuel) => ({ ...actuel, [cle]: texte }))}
                     />
                   ) : null}
-                  <HorizontalPlan plan={planAjuste ?? plan} couvertures={couvertures} volumeAjuste={ajustementsOuverts} />
+                  <HorizontalPlan plan={planAjuste ?? plan} couvertures={couvertures} volumeAjuste={ajustementsActifs} />
 
                   {!planningActif && !multi ? (
                     <View style={styles.ajustBloc}>
@@ -2700,14 +2709,17 @@ function moyenne(valeurs: number[]) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC', fontFamily: 'Inter, system-ui, sans-serif' },
   headerContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 20, gap: 12, flexWrap: 'wrap' },
-  headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 12, flexShrink: 1, minWidth: 0 },
+  headerBrandEtroit: { width: '100%' },
   logoBadge: { backgroundColor: '#0F2D46', padding: 10, borderRadius: 8, borderWidth: 1.5, borderColor: '#F4C430', alignItems: 'center', justifyContent: 'center' },
   headerTextContainer: { alignItems: 'flex-start' },
   brandTitle: { fontSize: 26, fontWeight: '700', color: '#0F2D46', letterSpacing: 1 },
+  brandTitleEtroit: { fontSize: 22 },
   brandTitleSub: { color: '#F4C430', fontWeight: '300' },
   brandByline: { fontSize: 12, color: '#687581', fontWeight: '500', marginTop: 1 },
   brandSubtitle: { fontSize: 11, color: '#687581', fontWeight: '500', letterSpacing: 1.5, marginTop: 2 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end' },
+  headerActionsEtroit: { width: '100%', justifyContent: 'flex-start' },
   logoutBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#0F2D46', justifyContent: 'center' },
   resetBtn: { paddingHorizontal: 8, paddingVertical: 6 },
   resetText: { color: '#94A3B8', fontSize: 12, fontWeight: '600' },
@@ -2717,7 +2729,7 @@ const styles = StyleSheet.create({
   devBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '600' },
   logoutText: { color: '#0F2D46', fontSize: 12, fontWeight: '700' },
   voile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  modale: { width: '100%', maxWidth: 560, backgroundColor: '#FFFFFF', borderRadius: 8, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
+  modale: { width: '100%', maxWidth: 560, maxHeight: '88%', backgroundColor: '#FFFFFF', borderRadius: 8, padding: 24, gap: 12, borderWidth: 1, borderColor: '#E2E8F0' },
   nouveauteVoile: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', alignItems: 'center', justifyContent: 'center', padding: 12 },
   nouveaute: { width: '100%', maxWidth: 640, backgroundColor: '#FFFFFF', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 10, gap: 4, borderWidth: 1, borderColor: '#E2E8F0' },
   nouveauteTitre: { fontSize: 15, fontWeight: '600', color: '#0F2D46', marginBottom: 2 },
@@ -2810,7 +2822,7 @@ const styles = StyleSheet.create({
   generateBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '600', textAlign: 'center' },
   horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 8 },
   horizonBtn: { flex: 1, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 176 },
+  dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 220 },
   dash: { width: '100%', maxWidth: 1100, alignItems: 'stretch' },
   panel: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', marginBottom: 16, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   panelTitle: { fontSize: 18, color: '#0F2D46', fontWeight: '700', marginBottom: 12 },
@@ -2922,9 +2934,9 @@ const styles = StyleSheet.create({
   kpiBadgeHaut: { backgroundColor: '#FFEDD5', color: '#9A3412' },
   footer: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingHorizontal: 16, paddingVertical: 12 },
   footerInner: { width: '100%', maxWidth: 1100, alignSelf: 'center', flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
-  footerBack: { borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, minWidth: 140, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  footerBack: { flex: 1, minWidth: 0, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
   footerBackText: { color: '#1E293B', fontWeight: '600', fontSize: 14 },
-  footerNext: { backgroundColor: '#0F2D46', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, minWidth: 180, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  footerNext: { flex: 1, minWidth: 0, backgroundColor: '#0F2D46', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 16, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
   footerNextText: { color: '#F4C430', fontWeight: '600', fontSize: 14 },
   toast: { position: 'absolute', left: 16, right: 16, bottom: 128, alignSelf: 'center', maxWidth: 420, backgroundColor: '#0F2D46', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10 },
   toastText: { color: '#F8FAFC', fontSize: 13, fontWeight: '600', textAlign: 'center' },
