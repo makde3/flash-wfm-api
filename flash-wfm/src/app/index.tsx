@@ -179,10 +179,9 @@ function etpDispoMoyenDe(planningVue: boolean, couvertures: LigneCouverture[] | 
 
 const AJUSTEMENTS_VIDES: Record<string, string> = {};
 
-const MODELE_LIBRE = 'Moyenne mobile';
+const MODELE_LIBRE = 'Holt-Winters';
 
-const MODES_PREVISION: { id: 'Moyenne mobile' | 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride'; titre: string; sous?: string }[] = [
-  { id: 'Moyenne mobile', titre: 'Moyenne mobile' },
+const MODES_PREVISION: { id: 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride'; titre: string; sous?: string }[] = [
   { id: 'Auto', titre: 'Recommandé (Auto)' },
   { id: 'Holt-Winters', titre: 'Saisonnalité & Tendances' },
   { id: 'LightGBM', titre: 'IA & Machine Learning' },
@@ -193,7 +192,7 @@ function libelleModele(modele: string | null) {
   return MODES_PREVISION.find((mode) => mode.id === modele)?.titre ?? '';
 }
 
-function modeleConnu(modele: string | null): modele is 'Moyenne mobile' | 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride' {
+function modeleConnu(modele: string | null): modele is 'Auto' | 'LightGBM' | 'Holt-Winters' | 'Hybride' {
   return MODES_PREVISION.some((mode) => mode.id === modele);
 }
 
@@ -388,7 +387,7 @@ function ModaleFeedback({
 }
 
 const AVANTAGES_PRO = [
-  { titre: 'Modèles de prévision avancés', detail: 'Auto, saisonnalité, machine learning et modèle hybride, au-delà de la Moyenne mobile.' },
+  { titre: 'Modèles de prévision avancés', detail: 'Recommandé (Auto), IA & Machine Learning et modèle hybride, au-delà de Saisonnalité & Tendances.' },
   { titre: 'Planning ETP réels', detail: 'Comparez le besoin calculé aux effectifs réellement présents, jour par jour.' },
   { titre: 'Synthèse exécutive', detail: 'Comparez les modèles et préparez la revue d’équipe.' },
   { titre: 'Exports Excel & PowerPoint', detail: 'Emportez le plan de production et la synthèse exécutive.' },
@@ -602,10 +601,14 @@ function HeaderLogo({
   const installation = useInstallationPwa();
   const { width } = useWindowDimensions();
   const etroit = width < 760;
-  const offreVisible = profile?.plan !== 'pro' && profile?.role !== 'admin';
-  const libelleStatut = hasProAccess
-    ? `⚡ Essai Pro (${heuresEssaiRestantes}h restantes)`
-    : '🔒 Version Free';
+  const comptePro = profile?.plan === 'pro';
+  const libelleStatut = profile?.role === 'admin'
+    ? '🛡️ ADMIN'
+    : comptePro
+      ? '👑 PRO'
+      : hasProAccess
+        ? `⚡ Essai Pro (${heuresEssaiRestantes}h)`
+        : '🔒 Version Free';
   return (
     <View style={styles.headerContainer}>
       <View style={[styles.headerBrand, etroit && styles.headerBrandEtroit]}>
@@ -616,20 +619,20 @@ function HeaderLogo({
           <Text style={[styles.brandTitle, etroit && styles.brandTitleEtroit]}>
             FLASH <Text style={styles.brandTitleSub}>WFM</Text>
           </Text>
-          <Text style={styles.brandByline}>by MakConsult</Text>
+          <Text style={styles.brandByline}>by MakConsult • v2.1</Text>
           <Text style={styles.brandSubtitle}>DATA · MÉTIER · PERFORMANCE</Text>
         </View>
       </View>
-      {offreVisible ? (
-        <View style={styles.headerOffre}>
-          <View style={[styles.essaiChip, !hasProAccess && styles.essaiChipFree]}>
-            <Text style={styles.essaiTexte}>{libelleStatut}</Text>
-          </View>
+      <View style={styles.headerOffre}>
+        <View style={[styles.essaiChip, !comptePro && !hasProAccess && profile?.role !== 'admin' && styles.essaiChipFree]}>
+          <Text style={styles.essaiTexte}>{libelleStatut}</Text>
+        </View>
+        {comptePro ? null : (
           <TouchableOpacity style={styles.proHeaderBtn} onPress={onPasserPro}>
             <Text style={styles.proHeaderTexte}>Passer en Pro ⚡</Text>
           </TouchableOpacity>
-        </View>
-      ) : null}
+        )}
+      </View>
       <View style={[styles.headerActions, etroit && styles.headerActionsEtroit]}>
         {installation.visible ? (
           <TouchableOpacity style={styles.installBtn} onPress={installation.installer}>
@@ -2570,7 +2573,7 @@ export default function FlashWFM() {
                   );
                 })}
               </View>
-              {proVerrouille ? <Text style={styles.hint}>Sans accès Pro, le plan est calculé avec la Moyenne mobile.</Text> : null}
+              {proVerrouille ? <Text style={styles.hint}>Sans accès Pro, le plan est calculé avec Saisonnalité & Tendances.</Text> : null}
 
               <View nativeID="tour-generer" style={tourId === 'tour-restitution' && !plan ? styles.tourCible : undefined}>
               <TouchableOpacity style={[styles.generateBtn, loading && styles.generateBtnDisabled]} onPress={handleGenerate} disabled={loading}>

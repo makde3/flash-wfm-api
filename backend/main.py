@@ -636,12 +636,16 @@ def entrainer_lightgbm(df, dates_futur):
         previsions.append(val_base * 0.5 + (moyenne_globale * coef_s * coef_m) * 0.5)
     return previsions, "LightGBM"
 
+def est_saisonnalite(modele: str) -> bool:
+    nom = " ".join(str(modele).strip().lower().replace("-", " ").split())
+    return "holt" in nom
+
 def verifier_droit_modele(modele: str, profil: dict, pro_actif: bool) -> None:
     if pro_actif or profil.get("plan") == "pro" or profil.get("role") == "admin":
         return
     if not essai_expire(profil.get("created_at")):
         return
-    if est_moyenne_mobile(modele):
+    if est_saisonnalite(modele):
         return
     raise HTTPException(status_code=403, detail="Ce modèle nécessite un abonnement Pro.")
 

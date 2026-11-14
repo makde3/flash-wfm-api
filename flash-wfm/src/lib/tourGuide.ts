@@ -57,7 +57,7 @@ export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: str
     id: 'tour-modeles',
     etape: 4,
     titre: 'Moteurs de prévision',
-    texte: 'Comparez la Moyenne mobile, Saisonnalité & Tendances, IA & Machine Learning et le Modèle Hybride. Auto retient le moteur au plus faible WAPE.',
+    texte: 'Comparez Recommandé (Auto), Saisonnalité & Tendances, IA & Machine Learning et le Modèle Hybride. Auto retient le moteur au plus faible WAPE.',
   },
   {
     id: 'tour-restitution',
