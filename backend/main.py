@@ -439,7 +439,7 @@ def _decoder_jwt(token: str, cle, algorithmes):
 def _raison_echec_jwt(exc: BaseException) -> str:
     if isinstance(exc, jwt.InvalidSignatureError):
         return "signature invalide"
-    return f"{exc.__class__.__name__}: {exc}"
+    return exc.__class__.__name__
 
 def identite_depuis_authorization(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):

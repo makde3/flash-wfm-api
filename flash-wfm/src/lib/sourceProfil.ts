@@ -28,19 +28,17 @@ export async function lireLiensProfil(userId: string): Promise<LiensProfil> {
 export async function enregistrerLienSource(userId: string, url: string): Promise<void> {
   const propre = url.trim();
   if (!propre) return;
-  const { error } = await supabase
+  await supabase
     .from('profiles')
     .update({ last_source_url: propre })
     .eq('user_id', userId);
-  if (error) console.error(error);
 }
 
 export async function enregistrerLienEtp(userId: string, url: string): Promise<void> {
   const propre = url.trim();
   if (!/^https?:\/\//i.test(propre)) return;
-  const { error } = await supabase
+  await supabase
     .from('profiles')
     .update({ last_etp_source_url: propre })
     .eq('user_id', userId);
-  if (error) console.error(error);
 }

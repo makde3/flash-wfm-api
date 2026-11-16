@@ -45,11 +45,9 @@ async function profilUtilisateur(id: string, email: string | null): Promise<Prof
       if (simple.error || !simple.data) return profilLibre();
       return profilLu(simple.data);
     }
-    const { error } = await supabase.from('profiles').insert({ user_id: id, email, plan: 'free' });
-    if (error && !/duplicate|unique/i.test(error.message)) console.error(error);
+    await supabase.from('profiles').insert({ user_id: id, email, plan: 'free' });
     return profilLibre();
-  } catch (error) {
-    console.error(error);
+  } catch {
     return profilLibre();
   }
 }
@@ -82,8 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         setProfile(await profilUtilisateur(user.id, user.email ?? null));
-      } catch (error) {
-        console.error(error);
+      } catch {
         setProfile(profilLibre());
       }
     })();
@@ -111,8 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setFinEssai(creation == null ? null : creation + ESSAI_MS);
         setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
         setProfile(profil);
-      } catch (error) {
-        console.error(error);
+      } catch {
         if (!actif) return;
         const creation = instantCreation(createdAt);
         setFinEssai(creation == null ? null : creation + ESSAI_MS);

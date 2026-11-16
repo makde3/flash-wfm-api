@@ -187,13 +187,11 @@ function lancerExport(action: () => void | Promise<void>) {
   try {
     const resultat = action();
     if (resultat && typeof (resultat as Promise<void>).then === 'function') {
-      void (resultat as Promise<void>).catch((error: unknown) => {
-        console.error(error);
+      void (resultat as Promise<void>).catch(() => {
         alert('Erreur lors de la génération du fichier.');
       });
     }
-  } catch (error) {
-    console.error(error);
+  } catch {
     alert('Erreur lors de la génération du fichier.');
   }
 }

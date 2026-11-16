@@ -1138,7 +1138,6 @@ function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heu
     }
     XLSXStyle.writeFile(classeur, 'Flash-WFM-plan-production.xlsx');
   } catch (error) {
-    console.error(error);
     alert("Erreur lors de la génération du fichier Excel.");
   }
 }
@@ -1178,7 +1177,6 @@ async function creerSessionCheckout(token: string) {
       body: JSON.stringify({}),
     });
   } catch (error) {
-    console.error(error);
     throw new Error('Impossible de joindre le serveur de paiement. Réessayez dans un instant.');
   }
   const texte = await response.text();
@@ -1209,7 +1207,6 @@ async function creerSessionPortail(token: string) {
       body: JSON.stringify({}),
     });
   } catch (error) {
-    console.error(error);
     throw new Error("Impossible d'ouvrir le portail de gestion. Réessayez dans un instant.");
   }
   const texte = await response.text();
@@ -1620,7 +1617,6 @@ export default function FlashWFM() {
       setTypeRetour(TYPES_RETOUR[0]);
       setToast('Merci, votre retour a bien été envoyé.');
     } catch (error) {
-      console.error(error);
       alert('Impossible d’enregistrer votre retour. Réessayez dans un instant.');
     } finally {
       setEnvoiRetour(false);
@@ -1829,7 +1825,6 @@ export default function FlashWFM() {
       }
       await Linking.openURL(data.url);
     } catch (error) {
-      console.error(error);
       alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur de paiement. Réessayez dans un instant.');
     } finally {
       setPaiementEnCours(false);
@@ -1856,7 +1851,6 @@ export default function FlashWFM() {
       }
       await Linking.openURL(data.url);
     } catch (error) {
-      console.error(error);
       alert(error instanceof ErreurApi ? error.message : "Impossible d'ouvrir le portail de gestion. Réessayez dans un instant.");
     } finally {
       setPaiementEnCours(false);
@@ -1886,7 +1880,6 @@ export default function FlashWFM() {
       const moyenneDmt = dmtPondere(reconnu);
       if (moyenneDmt != null) setAht(String(moyenneDmt));
     } catch (error) {
-      console.error(error);
       setDataPreview(null);
       alert(error instanceof Error ? error.message : 'Erreur lors de la lecture du fichier Excel.');
     }
@@ -1917,7 +1910,6 @@ export default function FlashWFM() {
       const moyenneDmt = dmtPondere(reconnu);
       if (moyenneDmt != null) setAht(String(moyenneDmt));
     } catch (error) {
-      console.error(error);
       setDataPreview(null);
       setFileName(null);
       alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur pour lire ce lien.');
@@ -1950,7 +1942,6 @@ export default function FlashWFM() {
       setEtpStatut('vide');
       if (userId) void enregistrerLienEtp(userId, url);
     } catch (error) {
-      console.error(error);
       alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur pour lire ce lien.');
     } finally {
       setLienEnCours(null);
@@ -1979,7 +1970,6 @@ export default function FlashWFM() {
       setEtpPlanning(null);
       setEtpStatut('vide');
     } catch (error) {
-      console.error(error);
       alert(error instanceof Error ? error.message : 'Erreur lors de la lecture du planning ETP.');
     }
   };
@@ -2194,7 +2184,6 @@ export default function FlashWFM() {
       }
       poserPlans(horizonDemande, plansSeuls);
     } catch (error) {
-      console.error(error);
       if (__DEV__ && (echecApiSimulable(error) || error instanceof ErreurApi)) {
         basculerMock(horizonDemande, modeleChoisi);
       } else if (error instanceof ErreurApi && error.status === 403 && error.message.includes('Droits utilisateur introuvables')) {
@@ -2266,7 +2255,6 @@ export default function FlashWFM() {
       setComparatif({ cle, holt: holtOk, light: lightOk });
       if (!holtOk || !lightOk) setSyntheseErreur('Un des modèles sources n’a pas pu être calculé. Le comparatif affiche les modèles disponibles.');
     } catch (error) {
-      console.error(error);
       if (__DEV__ && echecApiSimulable(error)) {
         poserMock();
         return;
