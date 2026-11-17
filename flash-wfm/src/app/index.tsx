@@ -108,7 +108,7 @@ function etpSaisiDuSkill(
     const lu = nombre(ciblesSkills[nom]?.etp ?? '');
     return lu != null && lu >= 0 ? lu : null;
   };
-  if (!multi) return etpMoyensAppliques;
+  if (!multi) return lire(series[0]?.skill ?? SKILL_DEFAUT) ?? etpMoyensAppliques;
   if (skill !== VUE_GLOBALE) return lire(skill);
   const valeurs = series.map((serie) => lire(serie.skill)).filter((valeur): valeur is number => valeur != null);
   if (!valeurs.length) return etpMoyensAppliques;
@@ -667,32 +667,6 @@ function HeaderLogo({
   );
 }
 
-function ChampParam({ label, info, value, onChangeText, dense }: { label: string; info: string; value: string; onChangeText: (texte: string) => void; dense?: boolean }) {
-  const [ouvert, setOuvert] = useState(false);
-  return (
-    <View style={[styles.paramField, dense && styles.paramFieldDense, ouvert && styles.paramFieldOuvert]}>
-      <View style={styles.labelRow}>
-        <Text style={[styles.labelInline, dense && styles.labelDense]} numberOfLines={dense ? 2 : 1}>{label}</Text>
-        <TouchableOpacity
-          accessibilityLabel={info}
-          accessibilityRole="button"
-          onPress={() => setOuvert((actuel) => !actuel)}
-          {...(Platform.OS === 'web' ? { onMouseEnter: () => setOuvert(true), onMouseLeave: () => setOuvert(false) } : {})}
-          style={styles.infoIcon}
-        >
-          <Ionicons name="help-circle-outline" size={16} color="#687581" />
-        </TouchableOpacity>
-      </View>
-      {ouvert ? (
-        <View style={styles.bulle}>
-          <Text style={styles.bulleTexte}>{info}</Text>
-        </View>
-      ) : null}
-      <TextInput style={[styles.paramInput, dense && styles.paramInputDense]} value={value} onChangeText={onChangeText} keyboardType="numeric" />
-    </View>
-  );
-}
-
 function TourGuide({ index, onSuivant, onPasser }: { index: number; onSuivant: () => void; onPasser: () => void }) {
   const etape = ETAPES_GUIDE[index];
   if (!etape) return null;
@@ -856,7 +830,12 @@ function styleLibelle(alt: boolean): CSSProperties {
   };
 }
 
-function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null, volumeAjuste = false): LignePlan[] {
+function texteEtpPlanifie(valeur: number | null | undefined) {
+  if (valeur == null || !Number.isFinite(valeur)) return '—';
+  return valeur.toLocaleString('fr-FR', { maximumFractionDigits: 1 });
+}
+
+function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null, etpPlanifies: (number | null)[] | null, volumeAjuste = false): LignePlan[] {
   const lignes: LignePlan[] = [
     {
       libelle: volumeAjuste ? 'Volume ajusté' : 'Volume prévu',
@@ -868,25 +847,30 @@ function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null, vo
       alt: true,
       cellules: plan.map((row, index) => ({ key: `e-${index}`, texte: row.etp_moyen_requis.toLocaleString('fr-FR') })),
     },
+    {
+      libelle: 'ETP planifiés',
+      alt: false,
+      cellules: plan.map((_, index) => ({ key: `p-${index}`, texte: texteEtpPlanifie(etpPlanifies?.[index]), fort: true })),
+    },
   ];
   if (!couvertures) return lignes;
   lignes.push(
     {
       libelle: 'Écart ETP',
-      alt: false,
+      alt: true,
       cellules: couvertures.map((ligne, index) => ({ key: `ec-${index}`, texte: texteEcart(ligne.ecart), couleur: couleurEcart(ligne.ecart), fort: true })),
     },
     {
       libelle: 'Taux de couverture (%)',
-      alt: true,
+      alt: false,
       cellules: couvertures.map((ligne, index) => ({ key: `c-${index}`, texte: texteCouverture(ligne.couverture), couleur: couleurCouverture(ligne.couverture), fort: true })),
     },
   );
   return lignes;
 }
 
-function TableauPlanWeb({ plan, couvertures, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; volumeAjuste: boolean }) {
-  const lignes = lignesPlan(plan, couvertures, volumeAjuste);
+function TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; etpPlanifies: (number | null)[] | null; volumeAjuste: boolean }) {
+  const lignes = lignesPlan(plan, couvertures, etpPlanifies, volumeAjuste);
   return React.createElement(
     'div',
     { id: 'flash-plan-scroll', style: styleDefilement },
@@ -954,13 +938,13 @@ function GrilleAjustements({ plan, saisies, onSaisie }: { plan: PlanLigne[]; sai
   );
 }
 
-function HorizontalPlan({ plan, couvertures, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; volumeAjuste: boolean }) {
+function HorizontalPlan({ plan, couvertures, etpPlanifies, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; etpPlanifies: (number | null)[] | null; volumeAjuste: boolean }) {
   if (plan.length === 0) return null;
   if (Platform.OS === 'web') {
-    return <View style={styles.hTable}>{TableauPlanWeb({ plan, couvertures, volumeAjuste })}</View>;
+    return <View style={styles.hTable}>{TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste })}</View>;
   }
 
-  const lignes = lignesPlan(plan, couvertures, volumeAjuste);
+  const lignes = lignesPlan(plan, couvertures, etpPlanifies, volumeAjuste);
   return (
     <View style={styles.hTable}>
       <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.hScroll}>
@@ -999,10 +983,11 @@ type ExportPlan = {
   delaiSlaJours: number;
   tauxOccupation: number;
   couvertures: LigneCouverture[] | null;
+  etpPlanifies: (number | null)[] | null;
   perimetre: string;
 };
 
-function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation, couvertures, perimetre }: ExportPlan) {
+function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation, couvertures, etpPlanifies, perimetre }: ExportPlan) {
   const planAjuste = appliquerAjustements(plan, saisies);
   const volumeBrut = plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
   const volumeAjuste = planAjuste.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
@@ -1034,14 +1019,14 @@ function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heu
     ['Volume ajusté manager', volumeAjuste],
     ['ETP moyen', Number(etpMoyen.toFixed(2))],
     [],
-    ['Période', 'Volume brut modèle', 'Ajustement (%)', 'Volume ajusté manager', 'ETP requis', libelleDelai, ...(avecCouverture ? ['ETP disponible', 'Écart ETP', 'Couverture (%)'] : [])],
+    ['Période', 'Volume brut modèle', 'Ajustement (%)', 'Volume ajusté manager', 'ETP requis', libelleDelai, 'ETP planifiés', ...(avecCouverture ? ['Écart ETP', 'Couverture (%)'] : [])],
     ...plan.map((ligne, index) => {
       const ajuste = planAjuste[index] ?? ligne;
-      const base: (string | number)[] = [ligne.date, ligne.volume_prevu, pourcentagePeriode(ligne.date, saisies), ajuste.volume_prevu, ajuste.etp_moyen_requis, valeurDelai];
+      const planifie = etpPlanifies?.[index] ?? couvertures?.[index]?.etpDispo;
+      const base: (string | number)[] = [ligne.date, ligne.volume_prevu, pourcentagePeriode(ligne.date, saisies), ajuste.volume_prevu, ajuste.etp_moyen_requis, valeurDelai, planifie != null ? Number(planifie.toFixed(2)) : ''];
       if (!couvertures) return base;
       const couverture = couvertures[index];
       base.push(
-        couverture?.etpDispo != null ? Number(couverture.etpDispo.toFixed(2)) : '',
         couverture?.ecart != null ? Number(couverture.ecart.toFixed(2)) : '',
         couverture?.couverture != null ? Number(couverture.couverture.toFixed(1)) : '',
       );
@@ -1049,7 +1034,7 @@ function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heu
     }),
   ];
   const enteteTableau = lignes.findIndex((ligne) => ligne[0] === 'Période');
-  const nbColonnes = avecCouverture ? 9 : 6;
+  const nbColonnes = avecCouverture ? 9 : 7;
   const feuille = XLSXStyle.utils.aoa_to_sheet(lignes);
   feuille['!merges'] = [
     { s: { r: 0, c: 0 }, e: { r: 0, c: nbColonnes - 1 } },
@@ -1062,7 +1047,8 @@ function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heu
     { wch: 24 },
     { wch: 14 },
     { wch: 18 },
-    ...(avecCouverture ? [{ wch: 18 }, { wch: 14 }, { wch: 16 }] : []),
+    { wch: 18 },
+    ...(avecCouverture ? [{ wch: 14 }, { wch: 16 }] : []),
   ];
   feuille['!rows'] = [{ hpt: 28 }, { hpt: 18 }];
   feuille['!autofilter'] = {
@@ -1441,18 +1427,30 @@ export default function FlashWFM() {
     [plan, saisiesAjustement],
   );
   const planningActif = hasProAccess && etpStatut === 'valide' && !!etpPlanning?.length;
+  const fichierEtpCharge = !!(etpFileName && ((etpPlanning?.length ?? 0) > 0 || (etpBrouillon?.length ?? 0) > 0));
   const dmtFichier = useMemo(() => dmtPondere(series), [series]);
   const etpSaisieVue = useMemo(
     () => etpSaisiDuSkill(skillCourant, multi, series, ciblesSkills, etpMoyensAppliques),
     [skillCourant, multi, series, ciblesSkills, etpMoyensAppliques],
   );
-  const planningVue = planningActif && (!multi || skillCourant === VUE_GLOBALE);
+  const sourceFichierEtp = etpPlanning?.length ? etpPlanning : (etpBrouillon?.length ? etpBrouillon : null);
+  const vueFichier = fichierEtpCharge && (!multi || skillCourant === VUE_GLOBALE);
+  const planningVue = hasProAccess && vueFichier && !!sourceFichierEtp;
   const couvertures = useMemo(() => {
     if (!planAjuste) return null;
-    if (planningVue) return couverturesDuPlan(planAjuste, etpPlanning, null);
-    if (!hasProAccess) return null;
+    if (planningVue && sourceFichierEtp) return couverturesDuPlan(planAjuste, sourceFichierEtp, null);
+    if (!hasProAccess || fichierEtpCharge) return null;
     return couverturesDuPlan(planAjuste, null, etpSaisieVue);
-  }, [planAjuste, planningVue, etpPlanning, hasProAccess, etpSaisieVue]);
+  }, [planAjuste, planningVue, sourceFichierEtp, hasProAccess, fichierEtpCharge, etpSaisieVue]);
+  const etpPlanifies = useMemo(() => {
+    if (!planAjuste) return null;
+    const source = etpPlanning?.length ? etpPlanning : etpBrouillon;
+    if (fichierEtpCharge && source?.length && (!multi || skillCourant === VUE_GLOBALE)) {
+      return couverturesDuPlan(planAjuste, source, null)?.map((ligne) => ligne.etpDispo) ?? planAjuste.map(() => null);
+    }
+    if (!fichierEtpCharge && etpSaisieVue != null) return planAjuste.map(() => etpSaisieVue);
+    return planAjuste.map(() => null);
+  }, [planAjuste, fichierEtpCharge, etpPlanning, etpBrouillon, etpSaisieVue, multi, skillCourant]);
   const periodesSansEtp = !!couvertures && planningVue && couvertures.some((ligne) => ligne.etpDispo == null);
   const socleCibles = useMemo(() => ({
     aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures,
@@ -1468,23 +1466,25 @@ export default function FlashWFM() {
   const cadreSynthese = useMemo(() => {
     const planCible = planDuSkill(skillSyntheseCourant, plansParSkill, plans, horizon);
     const etpSaisie = etpSaisiDuSkill(skillSyntheseCourant, multi, series, ciblesSkills, etpMoyensAppliques);
-    const avecPlanning = planningActif && (!multi || skillSyntheseCourant === VUE_GLOBALE);
+    const vueFichierSynthese = fichierEtpCharge && (!multi || skillSyntheseCourant === VUE_GLOBALE);
+    const source = etpPlanning?.length ? etpPlanning : etpBrouillon;
+    const avecPlanning = hasProAccess && vueFichierSynthese && !!source?.length;
     const couverturesCible = !planCible
       ? null
       : avecPlanning
-        ? couverturesDuPlan(planCible, etpPlanning, null)
-        : hasProAccess
+        ? couverturesDuPlan(planCible, source, null)
+        : hasProAccess && !fichierEtpCharge
           ? couverturesDuPlan(planCible, null, etpSaisie)
           : null;
     return {
       perimetre: series.length ? (multi ? libellePerimetre(skillSyntheseCourant) : series[0].skill) : SKILL_DEFAUT,
       cibles: ciblesDuSkill(skillSyntheseCourant, multi, series, ciblesSkills, plansParSkill, horizon, socleCibles),
-      planning: avecPlanning ? etpPlanning : null,
+      planning: avecPlanning ? source : null,
       etpDispo: etpDispoMoyenDe(avecPlanning, couverturesCible, etpSaisie),
       holt: vueDesPlans(comparatif?.holt ?? null, skillSyntheseCourant),
       light: vueDesPlans(comparatif?.light ?? null, skillSyntheseCourant),
     };
-  }, [skillSyntheseCourant, plansParSkill, plans, horizon, multi, series, ciblesSkills, etpMoyensAppliques, planningActif, etpPlanning, hasProAccess, socleCibles, comparatif]);
+  }, [skillSyntheseCourant, plansParSkill, plans, horizon, multi, series, ciblesSkills, etpMoyensAppliques, fichierEtpCharge, etpPlanning, etpBrouillon, hasProAccess, socleCibles, comparatif]);
 
   const appliquerVierge = useCallback(() => {
     setCurrentStep(1);
@@ -1989,6 +1989,14 @@ export default function FlashWFM() {
     avancer(3);
   };
 
+  const retirerFichierEtp = () => {
+    setEtpFileName(null);
+    setEtpBrouillon(null);
+    setEtpPlanning(null);
+    setEtpStatut('vide');
+    setUrlEtp('');
+  };
+
   const socleConfig = () => ({
     dmt: aht || '360',
     sla: sla || '80',
@@ -2023,16 +2031,6 @@ export default function FlashWFM() {
       return suivant;
     });
     oublierPlans();
-  };
-
-  const saisirEtpMoyen = (valeur: string) => {
-    setEtpMoyens(valeur);
-    if (!valeur.trim()) {
-      setEtpMoyensAppliques(null);
-      return;
-    }
-    const lu = nombre(valeur);
-    if (lu != null && lu >= 0) setEtpMoyensAppliques(lu);
   };
 
   const passerEtp = () => {
@@ -2285,21 +2283,9 @@ export default function FlashWFM() {
       delaiSlaJours: delaiJoursDepuisHeures(ciblesVue.delaiTraitement),
       tauxOccupation: parseInt(ciblesVue.occupation, 10) || 85,
       couvertures,
+      etpPlanifies,
       perimetre,
     });
-  };
-
-  const calculerMoyens = () => {
-    if (proVerrouille) {
-      setModalePro(true);
-      return;
-    }
-    const valeur = nombre(etpMoyens);
-    if (valeur == null || valeur < 0) {
-      alert("Indiquez un nombre d'ETP moyens par jour.");
-      return;
-    }
-    setEtpMoyensAppliques(valeur);
   };
 
   const retour = () => {
@@ -2421,7 +2407,12 @@ export default function FlashWFM() {
               </View>
               {etpFileName && (etpBrouillon?.length || etpPlanning?.length) ? (
                 <View style={styles.successBox}>
-                  <Text style={styles.successText} numberOfLines={2}>{etpStatut === 'valide' ? 'Planning validé' : 'Fichier prêt à valider'} : {etpFileName}</Text>
+                  <View style={styles.etpFichierLigne}>
+                    <Text style={styles.successText} numberOfLines={2}>{etpStatut === 'valide' ? 'Planning validé' : 'Fichier prêt à valider'} : {etpFileName}</Text>
+                    <TouchableOpacity style={styles.etpRetirer} onPress={retirerFichierEtp} accessibilityRole="button" accessibilityLabel="Retirer le fichier ETP">
+                      <Ionicons name="close" size={18} color="#0F2D46" />
+                    </TouchableOpacity>
+                  </View>
                   <Text style={styles.hint}>{(etpBrouillon ?? etpPlanning)?.length.toLocaleString('fr-FR')} jour(s) reconnu(s)</Text>
                 </View>
               ) : null}
@@ -2563,6 +2554,66 @@ export default function FlashWFM() {
               </View>
               {proVerrouille ? <Text style={styles.hint}>Sans accès Pro, le plan est calculé avec Saisonnalité & Tendances.</Text> : null}
 
+              <View style={styles.etpSaisies}>
+                {fichierEtpCharge ? (
+                  <View style={styles.etpPilotage}>
+                    <Text style={styles.etpPilotageTexte}>Effectifs pilotés par le fichier importé</Text>
+                    <TouchableOpacity style={styles.etpRetirer} onPress={retirerFichierEtp} accessibilityRole="button" accessibilityLabel="Retirer le fichier ETP">
+                      <Ionicons name="close" size={18} color="#0F2D46" />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                {!fichierEtpCharge && (series.length ? series : [{ skill: SKILL_DEFAUT }]).every((serie) => nombre((ciblesSkills[serie.skill]?.etp ?? '').trim() || (!multi && serie.skill === (series[0]?.skill ?? SKILL_DEFAUT) ? etpMoyens : '')) == null) ? (
+                  <Text style={styles.etpAlerteTexte}>Renseignez les ETP disponibles par file ou importez un planning ETP pour calculer vos écarts de couverture</Text>
+                ) : null}
+                <View style={styles.etpSaisieLigne}>
+                  {(series.length ? series : [{ skill: SKILL_DEFAUT }]).map((serie) => {
+                    const secours = !multi && serie.skill === (series[0]?.skill ?? SKILL_DEFAUT) ? etpMoyens : '';
+                    const valeur = (ciblesSkills[serie.skill]?.etp ?? '').trim() ? (ciblesSkills[serie.skill]?.etp ?? '') : secours;
+                    const vide = nombre(valeur) == null;
+                    return (
+                      <View key={serie.skill} style={styles.skillChamp}>
+                        <Text style={styles.skillLabel}>{serie.skill}</Text>
+                        <TextInput
+                          style={[styles.skillInput, fichierEtpCharge && styles.etpSaisieGrisee, !fichierEtpCharge && vide && styles.etpSaisieAlerte]}
+                          value={valeur}
+                          editable={!fichierEtpCharge}
+                          onChangeText={(texte) => {
+                            if (fichierEtpCharge) return;
+                            majConfig(serie.skill, 'etp', texte);
+                            if (!multi) {
+                              setEtpMoyens(texte);
+                              const lu = nombre(texte);
+                              setEtpMoyensAppliques(lu != null && lu >= 0 ? lu : null);
+                            }
+                          }}
+                          keyboardType="decimal-pad"
+                          placeholder="0"
+                          placeholderTextColor="#94A3B8"
+                        />
+                      </View>
+                    );
+                  })}
+                  <View style={styles.skillChamp}>
+                    <Text style={styles.skillLabel}>Toutes files</Text>
+                    <TextInput
+                      style={[styles.skillInput, styles.skillInputLecture]}
+                      value={(() => {
+                        const valeurs = (series.length ? series : [{ skill: SKILL_DEFAUT }]).map((serie) => {
+                          const secours = !multi && serie.skill === (series[0]?.skill ?? SKILL_DEFAUT) ? etpMoyens : '';
+                          const brut = (ciblesSkills[serie.skill]?.etp ?? '').trim() ? (ciblesSkills[serie.skill]?.etp ?? '') : secours;
+                          return nombre(brut);
+                        }).filter((valeur): valeur is number => valeur != null && valeur >= 0);
+                        return valeurs.length ? valeurs.reduce((somme, valeur) => somme + valeur, 0).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) : '';
+                      })()}
+                      editable={false}
+                      placeholder="—"
+                      placeholderTextColor="#94A3B8"
+                    />
+                  </View>
+                </View>
+              </View>
+
               <View nativeID="tour-generer" style={tourId === 'tour-restitution' && !plan ? styles.tourCible : undefined}>
               <TouchableOpacity style={[styles.generateBtn, loading && styles.generateBtnDisabled]} onPress={handleGenerate} disabled={loading}>
                 {loading ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.generateBtnText}>{plan ? 'Recalculer le plan de production' : 'Générer le plan de production'}</Text>}
@@ -2572,19 +2623,6 @@ export default function FlashWFM() {
               {multi ? (
                 <View style={styles.skillBloc}>
                   <SelecteurSkill skills={series.map((serie) => serie.skill)} actif={skillCourant} onChoisir={setSkillActif} />
-                  <View style={styles.skillChamp}>
-                    <Text style={styles.skillLabel}>ETP dispo</Text>
-                    <TextInput
-                      style={[styles.skillInput, skillCourant === VUE_GLOBALE && styles.skillInputLecture]}
-                      value={skillCourant === VUE_GLOBALE ? (etpSaisieVue == null ? '' : etpSaisieVue.toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })) : (ciblesSkills[skillCourant]?.etp ?? '')}
-                      editable={skillCourant !== VUE_GLOBALE}
-                      onChangeText={(texte) => { if (skillCourant !== VUE_GLOBALE) majConfig(skillCourant, 'etp', texte); }}
-                      keyboardType="decimal-pad"
-                      placeholder={skillCourant === VUE_GLOBALE ? '—' : '0'}
-                      placeholderTextColor="#94A3B8"
-                    />
-                  </View>
-                  <Text style={styles.hint}>{skillCourant === VUE_GLOBALE ? 'Somme des ETP disponibles. Les paramètres de calcul se règlent à l’étape 3.' : 'ETP disponible de cette file. Les autres paramètres se règlent à l’étape 3.'}</Text>
                 </View>
               ) : null}
 
@@ -2650,7 +2688,7 @@ export default function FlashWFM() {
                     </View>
                   </View>
                   {planningVue ? <Text style={styles.hint}>Écart et couverture calculés à partir du planning ETP importé.</Text> : null}
-                  {multi && planningActif && skillCourant !== VUE_GLOBALE ? <Text style={styles.hint}>Cette file utilise l'ETP saisi ci-dessus. La vue globale conserve le planning jour par jour.</Text> : null}
+                  {fichierEtpCharge && multi && skillCourant !== VUE_GLOBALE ? <Text style={styles.hint}>Le fichier ETP s’applique à la vue Toutes files.</Text> : null}
                   {periodesSansEtp ? <Text style={styles.hint}>Certaines périodes du plan n’ont pas de correspondance dans le fichier ETP.</Text> : null}
                   {ajustementsActifs ? (
                     <GrilleAjustements
@@ -2659,25 +2697,7 @@ export default function FlashWFM() {
                       onSaisie={(cle, texte) => setAjustementsSaisis((actuel) => ({ ...actuel, [cle]: texte }))}
                     />
                   ) : null}
-                  <HorizontalPlan plan={planAjuste ?? plan} couvertures={couvertures} volumeAjuste={ajustementsActifs} />
-
-                  {!planningActif && !multi ? (
-                    <View style={styles.ajustBloc}>
-                      <View style={styles.titleRow}>
-                        <Text style={styles.ajustTitre}>Ajuster ETP dispo</Text>
-                        {!proVerrouille ? null : <Text style={styles.proBadge}>PRO</Text>}
-                      </View>
-                      <Text style={styles.hint}>Sans planning importé, un effectif moyen est appliqué à chaque période du tableau.</Text>
-                      <View style={styles.ajustRow}>
-                        <View style={styles.ajustChamp}>
-                          <ChampParam label="ETP Moyens par jour" info="Effectif présent sur le plateau : Nombre moyen de conseillers en ligne ou prêts à prendre des flux (FTE)." value={etpMoyens} onChangeText={saisirEtpMoyen} />
-                        </View>
-                        <TouchableOpacity style={[styles.generateBtn, styles.ajustBtn]} onPress={calculerMoyens}>
-                          <Text style={styles.generateBtnText}>{etpMoyensAppliques == null ? 'Calculer' : 'Rafraîchir'}</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  ) : null}
+                  <HorizontalPlan plan={planAjuste ?? plan} couvertures={couvertures} etpPlanifies={etpPlanifies} volumeAjuste={ajustementsActifs} />
                 </View>
               ) : null}
             </View>
@@ -2866,6 +2886,15 @@ const styles = StyleSheet.create({
   skillLabel: { color: '#687581', fontSize: 11, fontWeight: '500' },
   skillInput: { height: 40, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 12, color: '#1E293B', fontSize: 14, backgroundColor: '#FFFFFF' },
   skillInputLecture: { backgroundColor: '#F8FAFC', color: '#1E293B' },
+  etpSaisies: { marginTop: 16, gap: 8 },
+  etpSaisieLigne: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  etpSaisieAlerte: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
+  etpSaisieGrisee: { backgroundColor: '#F1F5F9', color: '#94A3B8' },
+  etpPilotage: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, minHeight: 40, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0' },
+  etpPilotageTexte: { flex: 1, color: '#0F2D46', fontSize: 14, fontWeight: '600' },
+  etpRetirer: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  etpAlerteTexte: { color: '#991B1B', fontSize: 14, lineHeight: 20 },
+  etpFichierLigne: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   actionBtn: { flexGrow: 1, flexBasis: 220 },
   modelBtn: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
   modelBtnPile: { flexDirection: 'column', alignItems: 'center', gap: 4 },
