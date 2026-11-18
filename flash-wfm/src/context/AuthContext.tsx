@@ -7,8 +7,6 @@ export type ProfilAuth = {
   role: 'user' | 'admin';
 };
 
-const ESSAI_MS = 48 * 60 * 60 * 1000;
-
 type AuthContextValue = {
   userId: string | null;
   profile: ProfilAuth | null;
@@ -16,9 +14,7 @@ type AuthContextValue = {
   toggleDevPro: () => void;
   isPro: boolean;
   hasProAccess: boolean;
-  heuresEssaiRestantes: number;
   abonnementActif: boolean;
-  finEssai: number | null;
   assurerDroits: () => void;
 };
 
@@ -52,24 +48,14 @@ async function profilUtilisateur(id: string, email: string | null): Promise<Prof
   }
 }
 
-function instantCreation(createdAt?: string) {
-  if (!createdAt) return null;
-  const instant = new Date(createdAt).getTime();
-  return Number.isFinite(instant) ? instant : null;
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [devForcePro, setDevForcePro] = useState(false);
   const [profile, setProfile] = useState<ProfilAuth | null>(null);
   const [abonnementActif, setAbonnementActif] = useState(false);
-  const [finEssai, setFinEssai] = useState<number | null>(null);
-  const [instant, setInstant] = useState(() => Date.now());
   const toggleDevPro = () => setDevForcePro((prev) => !prev);
   const isPro = profile?.plan === 'pro' || profile?.role === 'admin';
-  const resteEssai = finEssai == null ? 0 : finEssai - instant;
-  const hasProAccess = isPro || resteEssai > 0;
-  const heuresEssaiRestantes = resteEssai > 0 ? Math.ceil(resteEssai / (60 * 60 * 1000)) : 0;
+  const hasProAccess = isPro;
   const assurerDroits = () => {
     void (async () => {
       try {
@@ -88,13 +74,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let actif = true;
-    const charger = async (id: string | null, createdAt?: string, email?: string | null) => {
+    const charger = async (id: string | null, email?: string | null) => {
       if (!actif) return;
       if (!id) {
         setUserId(null);
         setProfile(null);
         setAbonnementActif(false);
-        setFinEssai(null);
         return;
       }
       setUserId(id);
@@ -104,27 +89,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           profilUtilisateur(id, email ?? null),
         ]);
         if (!actif) return;
-        const creation = instantCreation(createdAt);
-        setFinEssai(creation == null ? null : creation + ESSAI_MS);
         setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
         setProfile(profil);
       } catch {
         if (!actif) return;
-        const creation = instantCreation(createdAt);
-        setFinEssai(creation == null ? null : creation + ESSAI_MS);
         setAbonnementActif(false);
         setProfile(profilLibre());
       }
     };
     supabase.auth.getSession().then(({ data }) => {
       const user = data.session?.user;
-      void charger(user?.id ?? null, user?.created_at, user?.email);
+      void charger(user?.id ?? null, user?.email);
     });
     const { data: ecoute } = supabase.auth.onAuthStateChange((event, session) => {
       if (!session && event !== 'SIGNED_OUT') return;
       const user = session?.user;
       setTimeout(() => {
-        void charger(user?.id ?? null, user?.created_at, user?.email);
+        void charger(user?.id ?? null, user?.email);
       }, 0);
     });
     return () => {
@@ -133,13 +114,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  useEffect(() => {
-    const minute = setInterval(() => setInstant(Date.now()), 60_000);
-    return () => clearInterval(minute);
-  }, []);
-
   return (
-    <AuthContext.Provider value={{ userId, profile, devForcePro, toggleDevPro, isPro, hasProAccess, heuresEssaiRestantes, abonnementActif, finEssai, assurerDroits }}>
+    <AuthContext.Provider value={{ userId, profile, devForcePro, toggleDevPro, isPro, hasProAccess, abonnementActif, assurerDroits }}>
       {children}
     </AuthContext.Provider>
   );

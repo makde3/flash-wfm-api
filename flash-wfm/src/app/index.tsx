@@ -582,7 +582,7 @@ function HeaderLogo({
   onReinitialiser: () => void;
   onFeedback: () => void;
 }) {
-  const { profile, isPro, hasProAccess, heuresEssaiRestantes } = useAuth();
+  const { profile, isPro } = useAuth();
   const installation = useInstallationPwa();
   const { width } = useWindowDimensions();
   const etroit = width < 760;
@@ -591,9 +591,7 @@ function HeaderLogo({
     ? '🛡️ ADMIN'
     : comptePro
       ? '👑 PRO'
-      : hasProAccess
-        ? `⚡ Essai Pro (${heuresEssaiRestantes}h)`
-        : '🔒 Version Free';
+      : 'Plan Découverte gratuit';
   return (
     <View style={styles.headerContainer}>
       <View style={[styles.headerBrand, etroit && styles.headerBrandEtroit]}>
@@ -609,7 +607,7 @@ function HeaderLogo({
         </View>
       </View>
       <View style={styles.headerOffre}>
-        <View style={[styles.essaiChip, !comptePro && !hasProAccess && profile?.role !== 'admin' && styles.essaiChipFree]}>
+        <View style={[styles.essaiChip, !comptePro && profile?.role !== 'admin' && styles.essaiChipFree]}>
           <Text style={styles.essaiTexte}>{libelleStatut}</Text>
         </View>
         {comptePro ? null : (
@@ -1197,7 +1195,7 @@ class ErreurApi extends Error {
 function messageHttp(status: number, detail: string) {
   if (detail) return detail;
   if (status === 401) return "Vous n'êtes pas authentifié. Veuillez vous reconnecter.";
-  if (status === 403) return "Accès refusé : abonnement Pro requis ou essai gratuit expiré.";
+  if (status === 403) return "Accès refusé : le Plan Découverte gratuit n'inclut pas ce modèle. Passez en Pro.";
   return `Erreur HTTP ${status}`;
 }
 
@@ -1437,7 +1435,9 @@ export default function FlashWFM() {
   const [cachePret, setCachePret] = useState(false);
   const suspendrePersistance = useRef(false);
   const demoACalculer = useRef(false);
-  const series = useMemo(() => (dataPreview ? analyserHistorique(dataPreview) : []), [dataPreview]);
+  const seriesImportees = useMemo(() => (dataPreview ? analyserHistorique(dataPreview) : []), [dataPreview]);
+  const filesBridées = proVerrouille && seriesImportees.length > 1;
+  const series = useMemo(() => (filesBridées ? seriesImportees.slice(0, 1) : seriesImportees), [filesBridées, seriesImportees]);
   const multi = series.length > 1;
   const skillCourant = skillAffiche(skillActif, multi, series);
   const skillSyntheseCourant = skillAffiche(skillSynthese, multi, series);
@@ -1446,9 +1446,10 @@ export default function FlashWFM() {
     () => planJournalierDu(skillCourant, plansParSkill, plans),
     [skillCourant, plansParSkill, plans],
   );
+  const joursHorizon = proVerrouille ? 7 : moisHorizon * 30;
   const plan = useMemo(
-    () => (planStocke ? planStocke.slice(0, moisHorizon * 30) : null),
-    [planStocke, moisHorizon],
+    () => (planStocke ? planStocke.slice(0, joursHorizon) : null),
+    [planStocke, joursHorizon],
   );
   const ajustementsActifs = hasProAccess && ajustementsOuverts;
   const saisiesAjustement = ajustementsActifs ? ajustementsSaisis : AJUSTEMENTS_VIDES;
@@ -1518,12 +1519,12 @@ export default function FlashWFM() {
       etpPlanifies,
       avecCouverture: couvertures != null,
       vue: vuePlan,
-      moisFiltre: vuePlan === 'journalier' && moisHorizon > 1 ? moisFiltre : null,
+      moisFiltre: vuePlan === 'journalier' && !proVerrouille && moisHorizon > 1 ? moisFiltre : null,
       weekendOuvert,
       feries: feriesCourants,
       masquerChomes: masquerFeriesChomes,
     });
-  }, [plan, planAjuste, etpPlanifies, couvertures, vuePlan, moisHorizon, moisFiltre, weekendOuvert, feriesCourants, masquerFeriesChomes]);
+  }, [plan, planAjuste, etpPlanifies, couvertures, vuePlan, moisHorizon, moisFiltre, weekendOuvert, feriesCourants, masquerFeriesChomes, proVerrouille]);
   useEffect(() => {
     if (moisFiltre && presentation && !presentation.mois.some((mois) => mois.id === moisFiltre)) setMoisFiltre(null);
   }, [moisFiltre, presentation]);
@@ -1541,7 +1542,7 @@ export default function FlashWFM() {
   );
   const cadreSynthese = useMemo(() => {
     const planCibleStocke = planJournalierDu(skillSyntheseCourant, plansParSkill, plans);
-    const planCible = planCibleStocke ? planCibleStocke.slice(0, moisHorizon * 30) : null;
+    const planCible = planCibleStocke ? planCibleStocke.slice(0, joursHorizon) : null;
     const etpSaisie = etpSaisiDuSkill(skillSyntheseCourant, multi, series, ciblesSkills, etpMoyensAppliques);
     const vueFichierSynthese = fichierEtpCharge && (!multi || skillSyntheseCourant === VUE_GLOBALE);
     const source = etpPlanning?.length ? etpPlanning : etpBrouillon;
@@ -1561,7 +1562,7 @@ export default function FlashWFM() {
       holt: vueDesPlans(comparatif?.holt ?? null, skillSyntheseCourant),
       light: vueDesPlans(comparatif?.light ?? null, skillSyntheseCourant),
     };
-  }, [skillSyntheseCourant, plansParSkill, plans, horizon, moisHorizon, multi, series, ciblesSkills, etpMoyensAppliques, fichierEtpCharge, etpPlanning, etpBrouillon, hasProAccess, socleCibles, comparatif]);
+  }, [skillSyntheseCourant, plansParSkill, plans, horizon, joursHorizon, multi, series, ciblesSkills, etpMoyensAppliques, fichierEtpCharge, etpPlanning, etpBrouillon, hasProAccess, socleCibles, comparatif]);
 
   const appliquerVierge = useCallback(() => {
     setCurrentStep(1);
@@ -1881,7 +1882,9 @@ export default function FlashWFM() {
     const jours = poserPlanningExemple();
     demoACalculer.current = true;
     avancer(4);
-    setToast(`Files Accueil et Support jusqu'à hier, et ${jours.toLocaleString('fr-FR')} jours d'ETP sur la période de prévision.`);
+    setToast(proVerrouille
+      ? 'File Accueil jusqu’à hier. Le Plan Découverte gratuit couvre une seule file.'
+      : `Files Accueil et Support jusqu'à hier, et ${jours.toLocaleString('fr-FR')} jours d'ETP sur la période de prévision.`);
   };
 
   const chargerExempleEtp = () => {
@@ -2497,7 +2500,8 @@ export default function FlashWFM() {
               {fileName && dataPreview ? (
                 <View style={styles.successBox}>
                   <Text style={styles.successText} numberOfLines={2}>{fileName.startsWith('http') ? 'Lien importé' : 'Fichier sélectionné'} : {fileName}</Text>
-                  <Text style={styles.hint}>{dataPreview.length.toLocaleString('fr-FR')} ligne(s){series.length <= 1 ? ` · 1 file (${series[0]?.skill ?? SKILL_DEFAUT})` : ''}{dmtFichier != null ? ` · DMT moyenne ${dmtFichier.toLocaleString('fr-FR')} s` : ' · DMT non détectée, à saisir à l’étape 3'}</Text>
+                  <Text style={styles.hint}>{dataPreview.length.toLocaleString('fr-FR')} ligne(s){seriesImportees.length <= 1 ? ` · 1 file (${series[0]?.skill ?? SKILL_DEFAUT})` : filesBridées ? ` · 1 file retenue (${series[0]?.skill ?? SKILL_DEFAUT})` : ''}{dmtFichier != null ? ` · DMT moyenne ${dmtFichier.toLocaleString('fr-FR')} s` : ' · DMT non détectée, à saisir à l’étape 3'}</Text>
+                  {filesBridées ? <Text style={styles.hint}>Le Plan Découverte gratuit couvre une seule file. Passez en Pro pour le multi-files.</Text> : null}
                   {multi ? (
                     <View style={styles.badgeFiles}>
                       <Ionicons name="layers-outline" size={16} color="#0F2D46" />
@@ -2655,15 +2659,36 @@ export default function FlashWFM() {
               <View nativeID="tour-horizon" style={tourId === 'tour-horizon' ? styles.tourCible : undefined}>
                 <Text style={styles.vueLabel}>Horizon</Text>
                 <View style={styles.horizonRow}>
+                  {proVerrouille ? (
+                    <View style={[styles.horizonBtn, styles.modelBtnActive]}>
+                      <Text style={[styles.modelBtnText, styles.modelBtnTextActive]}>7 jours</Text>
+                    </View>
+                  ) : null}
                   {MOIS_HORIZON.map((mois) => (
-                    <TouchableOpacity key={mois} style={[styles.horizonBtn, moisHorizon === mois && styles.modelBtnActive]} onPress={() => { setMoisHorizon(mois); setMoisFiltre(null); }}>
-                      <Text style={[styles.modelBtnText, moisHorizon === mois && styles.modelBtnTextActive]}>{mois} mois</Text>
+                    <TouchableOpacity
+                      key={mois}
+                      style={[styles.horizonBtn, !proVerrouille && moisHorizon === mois && styles.modelBtnActive]}
+                      onPress={() => {
+                        if (proVerrouille) {
+                          setModalePro(true);
+                          return;
+                        }
+                        setMoisHorizon(mois);
+                        setMoisFiltre(null);
+                      }}
+                    >
+                      <Text style={[styles.modelBtnText, !proVerrouille && moisHorizon === mois && styles.modelBtnTextActive]}>{mois} mois</Text>
+                      {proVerrouille ? <Text style={styles.proBadge}>PRO</Text> : null}
                     </TouchableOpacity>
                   ))}
                 </View>
-                <Text style={styles.hint}>L'horizon fixe la période projetée, jusqu'à 12 mois. La vue change seulement l'affichage et l'export.</Text>
+                {proVerrouille ? (
+                  <Text style={styles.hint}>Le Plan Découverte gratuit est limité à 7 jours. Passez en Pro pour projeter jusqu'à 12 mois.</Text>
+                ) : (
+                  <Text style={styles.hint}>L'horizon fixe la période projetée, jusqu'à 12 mois. La vue change seulement l'affichage et l'export.</Text>
+                )}
               </View>
-              {planStocke && planStocke.length < moisHorizon * 30 ? <Text style={styles.hint}>Ce plan couvre {planStocke.length.toLocaleString('fr-FR')} jours. Recalculez pour projeter {moisHorizon} mois.</Text> : null}
+              {planStocke && planStocke.length < joursHorizon ? <Text style={styles.hint}>Ce plan couvre {planStocke.length.toLocaleString('fr-FR')} jours. Recalculez pour projeter {proVerrouille ? '7 jours' : `${moisHorizon} mois`}.</Text> : null}
 
               <View nativeID="tour-modeles" style={[styles.modelRow, tourId === 'tour-modeles' && styles.tourCible]}>
                 {MODES_PREVISION.map((mode) => {
@@ -2830,7 +2855,7 @@ export default function FlashWFM() {
                       </TouchableOpacity>
                     ))}
                   </View>
-                  {vuePlan === 'journalier' && moisHorizon > 1 && presentation?.mois.length ? (
+                  {vuePlan === 'journalier' && !proVerrouille && moisHorizon > 1 && presentation?.mois.length ? (
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtreMois}>
                       <TouchableOpacity style={[styles.filtrePuce, moisFiltre == null && styles.modelBtnActive]} onPress={() => setMoisFiltre(null)}>
                         <Text style={[styles.modelBtnText, moisFiltre == null && styles.modelBtnTextActive]}>Tous les mois</Text>
@@ -3080,7 +3105,7 @@ const styles = StyleSheet.create({
   vueLabel: { color: '#687581', fontSize: 12, fontWeight: '600', marginBottom: 6, marginTop: 4 },
   filtreMois: { flexDirection: 'row', gap: 8, paddingVertical: 4, marginBottom: 8 },
   filtrePuce: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  horizonBtn: { flexGrow: 1, flexBasis: 96, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  horizonBtn: { flexGrow: 1, flexBasis: 96, flexDirection: 'row', gap: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 220 },
   dash: { width: '100%', maxWidth: 1100, alignItems: 'stretch' },
   panel: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', marginBottom: 16, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },

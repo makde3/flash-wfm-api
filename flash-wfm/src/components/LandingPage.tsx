@@ -14,9 +14,9 @@ type LandingPageProps = {
 const MARGE_HAUT = 32 + (Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0);
 
 const PUCES_ESSAI = [
-  'Accès complet pendant 48h à toutes les fonctionnalités',
-  'Modèles de prévision Holt-Winters, LightGBM & Hybride',
-  'Dimensionnement Erlang C multi-skills & export Excel',
+  'Plan Découverte gratuit, sans limite de durée',
+  'Prévision Saisonnalité & Tendances et Erlang C',
+  'Une file et un horizon de 7 jours',
 ];
 
 const PUCES_PRO = [
@@ -80,7 +80,7 @@ export default function LandingPage({ onConnexion, onEssai }: LandingPageProps) 
             </Text>
             <View style={[styles.actions, etroit && styles.actionsEtroit]}>
               <TouchableOpacity style={[styles.principal, etroit && styles.boutonEtroit]} onPress={onEssai} accessibilityRole="button">
-                <Text style={styles.principalTexte}>Démarrer l'essai Pro gratuit (48h)</Text>
+                <Text style={styles.principalTexte}>Démarrer le Plan Découverte gratuit</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.secondaire, etroit && styles.boutonEtroit]} onPress={() => setDemoOuverte(true)} accessibilityRole="button">
                 <Text style={styles.secondaireTexte}>Voir une démo</Text>
@@ -114,14 +114,14 @@ export default function LandingPage({ onConnexion, onEssai }: LandingPageProps) 
             <Text style={styles.sectionTitre}>Une offre simple</Text>
             <View style={[styles.offres, etroit && styles.offresEtroit]}>
               <View style={[styles.offre, etroit && styles.offreEtroit]}>
-                <Text style={styles.offreKicker}>Essai Pro Découverte (48h)</Text>
+                <Text style={styles.offreKicker}>Plan Découverte gratuit</Text>
                 <View>
                   <Text style={styles.prix}>0 €</Text>
                   <Text style={styles.mention}>Sans carte bancaire</Text>
                 </View>
                 <ListePuces lignes={PUCES_ESSAI} />
                 <TouchableOpacity style={[styles.secondaire, styles.offreBouton]} onPress={onEssai} accessibilityRole="button">
-                  <Text style={styles.secondaireTexte}>Démarrer l'essai 48h</Text>
+                  <Text style={styles.secondaireTexte}>Démarrer le Plan Découverte gratuit</Text>
                 </TouchableOpacity>
               </View>
               <View style={[styles.offre, styles.offreVedette, etroit && styles.offreEtroit]}>

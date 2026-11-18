@@ -39,7 +39,7 @@ export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: str
     id: 'tour-source',
     etape: 1,
     titre: 'Import des flux',
-    texte: 'Importez l’historique de volumes. Si le samedi ou le dimanche n’a aucun volume, ce jour n’est pas projeté. L’essai Pro de 48 h est inclus dès l’inscription.',
+    texte: 'Importez l’historique de volumes. Si le samedi ou le dimanche n’a aucun volume, ce jour n’est pas projeté. Le Plan Découverte gratuit couvre une seule file.',
   },
   {
     id: 'tour-etp',
@@ -63,7 +63,7 @@ export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: str
     id: 'tour-horizon',
     etape: 4,
     titre: 'Horizon',
-    texte: 'Choisissez 1, 3, 6 ou 12 mois. L’horizon fixe la période projetée, jusqu’à un an, sans changer le modèle ni le calcul Erlang.',
+    texte: 'Le Plan Découverte gratuit projette 7 jours. Le plan Pro ouvre 1, 3, 6 ou 12 mois, sans changer le modèle ni le calcul Erlang.',
   },
   {
     id: 'tour-restitution',

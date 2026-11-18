@@ -1,0 +1,17 @@
+# Flash WFM — architecture
+
+## Hébergement
+
+- Le frontend Expo est hébergé sur Vercel. Ne crée jamais de route serverless `/api`, ni de webhook, dans le projet Vercel.
+- Le backend Python FastAPI et les webhooks Stripe sont hébergés uniquement sur Render : `https://flash-wfm-api.onrender.com`. Le webhook Stripe est `POST /webhook/stripe`.
+- Supabase gère la base et l’authentification. Le plan tient dans `profiles.plan` : `free` ou `pro`.
+
+## Modèle économique
+
+- Plan Découverte (`plan = free`) : gratuit, sans limite de durée. Une seule file, horizon de 7 jours, exports verrouillés. Le clic sur un export ouvre la modale Pro.
+- Plan Pro (`plan = pro`) : 39 € par mois, via le Payment Link Stripe `https://buy.stripe.com/00wdR1fLr10reWO7ol2ZO00`, avec `client_reference_id` égal à l’identifiant Supabase.
+- Ne déplace pas l’activation de licence vers Vercel. C’est le webhook Render qui écrit `profiles.plan`.
+
+## Avant de modifier le code
+
+Liste toujours les fichiers concernés avant de modifier le code.

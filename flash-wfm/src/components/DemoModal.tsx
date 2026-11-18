@@ -224,7 +224,7 @@ export default function DemoModal({ visible, onFermer, onEssai }: DemoModalProps
                 onPress={onEssai}
                 accessibilityRole="button"
               >
-                <Text style={styles.principalTexte}>Tester avec mes données (Essai Pro 48h)</Text>
+                <Text style={styles.principalTexte}>Tester avec mes données (Plan Découverte gratuit)</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>

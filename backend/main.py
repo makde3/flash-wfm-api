@@ -100,7 +100,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ESSAI_HEURES = 48
 _clients_jwks: Dict[str, jwt.PyJWKClient] = {}
 _client_service = None
 
@@ -408,17 +407,6 @@ def wape_sur_historique(df, modele_propre):
         return None
     return round(score, 1)
 
-def essai_expire(created_at) -> bool:
-    if not created_at:
-        return True
-    try:
-        debut = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
-    except ValueError:
-        return True
-    if debut.tzinfo is None:
-        debut = debut.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) >= debut + timedelta(hours=ESSAI_HEURES)
-
 def url_projet_supabase() -> str:
     url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
     for suffixe in ("/auth/v1", "/rest/v1"):
@@ -643,8 +631,6 @@ def est_saisonnalite(modele: str) -> bool:
 
 def verifier_droit_modele(modele: str, profil: dict, pro_actif: bool) -> None:
     if pro_actif or profil.get("plan") == "pro" or profil.get("role") == "admin":
-        return
-    if not essai_expire(profil.get("created_at")):
         return
     if est_saisonnalite(modele):
         return
