@@ -137,6 +137,7 @@ class PrevisionRequest(BaseModel):
     evaluer_wape: bool = False
     skill: str | None = None
     skill_configs: Dict[str, SkillConfigPayload] | None = None
+    nb_mois: int | None = None
 
 def calcul_erlang_c(agents, traffic):
     if not math.isfinite(agents) or not math.isfinite(traffic) or agents <= 0 or traffic < 0 or agents <= traffic:
@@ -698,30 +699,26 @@ def enregistrer_abonnement(abonnement: dict, supprime: bool) -> None:
     user_id = utilisateur_abonnement(abonnement)
     client = client_service()
     try:
-        if user_id:
-            champs["user_id"] = user_id
-            client.table("subscriptions").upsert(champs, on_conflict="stripe_subscription_id").execute()
-            try:
-                client.table("profiles").update({
-                    "plan": "pro" if statut in {"active", "trialing"} else "free",
-                }).eq("user_id", user_id).execute()
-            except Exception:
-                print("-> Mise a jour du plan impossible", flush=True)
-            return
-        existant = (
-            client.table("subscriptions")
-            .select("id")
-            .eq("stripe_subscription_id", identifiant)
-            .limit(1)
-            .execute()
-        )
-        if not existant.data:
+        if not user_id:
+            existant = (
+                client.table("subscriptions")
+                .select("user_id")
+                .eq("stripe_subscription_id", identifiant)
+                .limit(1)
+                .execute()
+            )
+            if existant.data:
+                user_id = existant.data[0].get("user_id")
+        if not user_id:
             raise HTTPException(status_code=400, detail="Abonnement Stripe sans utilisateur associé.")
-        client.table("subscriptions").update({
-            "stripe_customer_id": champs["stripe_customer_id"],
-            "status": champs["status"],
-            "current_period_end": champs["current_period_end"],
-        }).eq("stripe_subscription_id", identifiant).execute()
+        champs["user_id"] = user_id
+        client.table("subscriptions").upsert(champs, on_conflict="stripe_subscription_id").execute()
+        try:
+            client.table("profiles").update({
+                "plan": "pro" if statut in {"active", "trialing"} else "free",
+            }).eq("user_id", user_id).execute()
+        except Exception:
+            print("-> Mise a jour du plan impossible", flush=True)
     except HTTPException:
         raise
     except Exception:
@@ -749,6 +746,10 @@ def abonnement_depuis_session_checkout(session: dict) -> None:
             meta = dict(abonnement.get("metadata") or {})
             meta["user_id"] = user_id
             abonnement["metadata"] = meta
+            try:
+                stripe.Subscription.modify(str(abonnement.get("id")), metadata={"user_id": user_id})
+            except stripe.StripeError:
+                print("-> Metadata abonnement non enregistree", flush=True)
     if not abonnement.get("customer") and session.get("customer"):
         abonnement["customer"] = session.get("customer")
     enregistrer_abonnement(abonnement, supprime=False)
@@ -800,7 +801,7 @@ def creer_session_checkout(authorization: str | None = Header(default=None)):
         session = stripe.checkout.Session.create(
             mode="subscription",
             line_items=[{"price": prix, "quantity": 1}],
-            success_url=f"{front}/?success=true",
+            success_url=f"{front}/?payment=success",
             cancel_url=f"{front}/?canceled=true",
             client_reference_id=user_id,
             metadata={"user_id": user_id},
@@ -1151,10 +1152,11 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
             "message": "Aucune date ou volume exploitable. Formats acceptes : jj/mm/aaaa, aaaa-mm-jj, ou numero de serie Excel.",
         }
 
-    est_court_terme = (requete.horizon == 'court_terme')
-    nb_steps_jour = 30 if est_court_terme else 365
+    mois_demandes = requete.nb_mois if requete.nb_mois in (1, 3, 6, 12) else None
+    est_court_terme = mois_demandes is not None or requete.horizon == 'court_terme'
+    nb_steps_jour = mois_demandes * 30 if mois_demandes else (30 if est_court_terme else 365)
     date_depart = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    dates_futur = pd.date_range(debut_prevision(est_court_terme, date_depart), periods=nb_steps_jour, freq='D')
+    dates_futur = pd.date_range(debut_prevision(True if mois_demandes else est_court_terme, date_depart), periods=nb_steps_jour, freq='D')
     
     modele_propre = str(requete.modele).strip().lower()
     previsions_brutes, nom_modele_final = prevoir_volumes(df, dates_futur, modele_propre)

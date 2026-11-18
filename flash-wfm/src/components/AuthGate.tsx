@@ -3,8 +3,10 @@ import { ActivityIndicator, View } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
 import { deconnecter } from '../lib/deconnexion';
+import { consommerPaiementApresConnexion, urlPaiementPro } from '../lib/proRequest';
 import { retourConfirmation, supabase } from '../lib/supabase';
 import AuthScreen from './AuthScreen';
+import LandingPage from './LandingPage';
 
 const INACTIVITE_MS = 30 * 60 * 1000;
 const MESSAGE_SESSION_EXPIREE = "Votre session a expiré pour cause d'inactivité. Veuillez vous reconnecter.";
@@ -14,6 +16,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [emailConfirme, setEmailConfirme] = useState(retourConfirmation.confirme);
   const [sessionExpiree, setSessionExpiree] = useState<string | null>(null);
+  const [afficherAuth, setAfficherAuth] = useState(retourConfirmation.confirme || retourConfirmation.erreur != null);
+  const [intention, setIntention] = useState<'connexion' | 'inscription'>('connexion');
   const bloquerSessionLien = useState({ courant: retourConfirmation.confirme, inscription: false })[0];
 
   useEffect(() => {
@@ -68,6 +72,26 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     };
   }, [session]);
 
+  useEffect(() => {
+    if (emailConfirme || retourConfirmation.erreur || sessionExpiree) setAfficherAuth(true);
+  }, [emailConfirme, sessionExpiree]);
+
+  useEffect(() => {
+    if (!session?.user || typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('payment') === 'success') {
+      consommerPaiementApresConnexion();
+      return;
+    }
+    if (!consommerPaiementApresConnexion()) return;
+    window.location.assign(urlPaiementPro({ id: session.user.id, email: session.user.email }));
+  }, [session]);
+
+  const ouvrirAuth = (mode: 'connexion' | 'inscription') => {
+    setIntention(mode);
+    setAfficherAuth(true);
+  };
+
   if (!ready) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E6E9EE' }}>
@@ -77,11 +101,21 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (!session) {
+    if (!afficherAuth) {
+      return (
+        <LandingPage
+          onConnexion={() => ouvrirAuth('connexion')}
+          onEssai={() => ouvrirAuth('inscription')}
+        />
+      );
+    }
     return (
       <AuthScreen
+        modeInitial={intention}
         emailConfirme={emailConfirme}
         erreurConfirmation={retourConfirmation.erreur}
         sessionExpiree={sessionExpiree}
+        onRetour={() => setAfficherAuth(false)}
         onConnexion={() => {
           bloquerSessionLien.courant = false;
         }}

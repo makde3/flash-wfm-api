@@ -7,9 +7,11 @@ import { LienReinitialisation } from '../lib/session';
 import { supabase } from '../lib/supabase';
 
 type AuthScreenProps = {
+  modeInitial?: 'connexion' | 'inscription';
   emailConfirme?: boolean;
   erreurConfirmation?: string | null;
   sessionExpiree?: string | null;
+  onRetour?: () => void;
   onConnexion?: () => void;
   onInscription?: () => void;
   onEchecInscription?: () => void;
@@ -67,8 +69,8 @@ function ChampMotDePasse({
   );
 }
 
-export default function AuthScreen({ emailConfirme = false, erreurConfirmation = null, sessionExpiree = null, onConnexion, onInscription, onEchecInscription }: AuthScreenProps) {
-  const [mode, setMode] = useState<'connexion' | 'inscription'>('connexion');
+export default function AuthScreen({ modeInitial = 'connexion', emailConfirme = false, erreurConfirmation = null, sessionExpiree = null, onRetour, onConnexion, onInscription, onEchecInscription }: AuthScreenProps) {
+  const [mode, setMode] = useState<'connexion' | 'inscription'>(modeInitial);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -147,6 +149,12 @@ export default function AuthScreen({ emailConfirme = false, erreurConfirmation =
   return (
     <SafeAreaView style={styles.screen}>
       <ScrollView contentContainerStyle={styles.corps} keyboardShouldPersistTaps="handled">
+        <View style={styles.colonne}>
+          {onRetour ? (
+            <TouchableOpacity onPress={onRetour} accessibilityRole="button" style={styles.retour}>
+              <Text style={styles.retourTexte}>← Retour à l'accueil</Text>
+            </TouchableOpacity>
+          ) : null}
         <View style={styles.card}>
           <Text style={styles.title}>FLASH <Text style={styles.titleAccent}>WFM</Text></Text>
           <Text style={styles.byline}>by MakConsult</Text>
@@ -226,6 +234,7 @@ export default function AuthScreen({ emailConfirme = false, erreurConfirmation =
             </Text>
           </TouchableOpacity>
         </View>
+        </View>
       </ScrollView>
       <LienReinitialisation />
       <PiedLegal />
@@ -257,6 +266,9 @@ export default function AuthScreen({ emailConfirme = false, erreurConfirmation =
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#E6E9EE', padding: 16 },
   corps: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 16 },
+  colonne: { width: '100%', maxWidth: 420 },
+  retour: { alignSelf: 'flex-start', minHeight: 40, justifyContent: 'center', marginBottom: 8 },
+  retourTexte: { color: '#687581', fontSize: 14, fontWeight: '500' },
   card: { backgroundColor: '#FFFFFF', width: '100%', maxWidth: 420, borderRadius: 8, padding: 24, borderWidth: 1, borderColor: '#E2E8F0', shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   title: { fontSize: 28, fontWeight: '700', color: '#0F2D46', letterSpacing: 0, textAlign: 'center' },
   titleAccent: { color: '#F4C430', fontWeight: '300' },

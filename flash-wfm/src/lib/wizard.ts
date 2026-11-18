@@ -209,21 +209,10 @@ export function couvertureLigne(etpDispo: number | null, etpRequis: number): Lig
 }
 
 export function planMock(horizon: Horizon, volumesHistoriques: number[]): PlanLigne[] {
+  if (horizon === 'court_terme') return planMockJours(1, volumesHistoriques);
   const positifs = volumesHistoriques.filter((volume) => Number.isFinite(volume) && volume > 0);
   const base = positifs.length ? positifs.reduce((somme, volume) => somme + volume, 0) / positifs.length : 900;
   const maintenant = new Date();
-  if (horizon === 'court_terme') {
-    const debut = new Date(Date.UTC(maintenant.getUTCFullYear(), maintenant.getUTCMonth() + 1, 1));
-    return Array.from({ length: 30 }, (_, index) => {
-      const date = new Date(debut.getTime() + index * 86400000);
-      const volume = Math.max(0, Math.round(base * (0.82 + (index % 7) * 0.06)));
-      return {
-        date: formaterJourUtc(date),
-        volume_prevu: volume,
-        etp_moyen_requis: Math.max(1, Math.ceil(volume / 140)),
-      };
-    });
-  }
   const debutMois = new Date(Date.UTC(maintenant.getUTCFullYear(), maintenant.getUTCMonth(), 1));
   return Array.from({ length: 12 }, (_, index) => {
     const date = new Date(Date.UTC(debutMois.getUTCFullYear(), debutMois.getUTCMonth() + index, 1));
@@ -233,6 +222,23 @@ export function planMock(horizon: Horizon, volumesHistoriques: number[]): PlanLi
       date: `${mois}/${date.getUTCFullYear()}`,
       volume_prevu: volume,
       etp_moyen_requis: Math.max(1, Math.ceil(volume / 30 / 140)),
+    };
+  });
+}
+
+export function planMockJours(mois: number, volumesHistoriques: number[]): PlanLigne[] {
+  const positifs = volumesHistoriques.filter((volume) => Number.isFinite(volume) && volume > 0);
+  const base = positifs.length ? positifs.reduce((somme, volume) => somme + volume, 0) / positifs.length : 900;
+  const maintenant = new Date();
+  const debut = new Date(Date.UTC(maintenant.getUTCFullYear(), maintenant.getUTCMonth() + 1, 1));
+  const longueur = Math.max(1, Math.round(mois)) * 30;
+  return Array.from({ length: longueur }, (_, index) => {
+    const date = new Date(debut.getTime() + index * 86400000);
+    const volume = Math.max(0, Math.round(base * (0.82 + (index % 7) * 0.06)));
+    return {
+      date: formaterJourUtc(date),
+      volume_prevu: volume,
+      etp_moyen_requis: Math.max(1, Math.ceil(volume / 140)),
     };
   });
 }

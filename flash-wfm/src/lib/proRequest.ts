@@ -1,10 +1,36 @@
 import { supabase } from './supabase';
 
 const EMAIL_PRO = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const LIEN_PAIEMENT_PRO = 'https://buy.stripe.com/00wdR1fLr10reWO7ol2ZO00';
+const CLE_PAIEMENT_ATTENTE = 'paiement_pro_attente';
 
 export function lienStripePro() {
   const brut = (process.env.EXPO_PUBLIC_STRIPE_LINK ?? '').trim();
-  return /^https:\/\//i.test(brut) ? brut : '';
+  return /^https:\/\//i.test(brut) ? brut : LIEN_PAIEMENT_PRO;
+}
+
+export function urlPaiementPro(user: { id: string; email?: string | null }) {
+  const url = new URL(lienStripePro());
+  url.searchParams.set('client_reference_id', user.id);
+  if (user.email) url.searchParams.set('prefilled_email', user.email);
+  return url.toString();
+}
+
+export function noterPaiementApresConnexion() {
+  if (typeof window === 'undefined') return;
+  window.sessionStorage.setItem(CLE_PAIEMENT_ATTENTE, '1');
+}
+
+export function annulerPaiementApresConnexion() {
+  if (typeof window === 'undefined') return;
+  window.sessionStorage.removeItem(CLE_PAIEMENT_ATTENTE);
+}
+
+export function consommerPaiementApresConnexion() {
+  if (typeof window === 'undefined') return false;
+  if (window.sessionStorage.getItem(CLE_PAIEMENT_ATTENTE) !== '1') return false;
+  window.sessionStorage.removeItem(CLE_PAIEMENT_ATTENTE);
+  return true;
 }
 
 export async function envoyerDemandePro(email: string, entreprise: string): Promise<void> {

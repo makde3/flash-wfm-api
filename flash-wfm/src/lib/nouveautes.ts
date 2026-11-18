@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const CLE_NOUVEAUTES = 'has_seen_commercial_v1';
-const CLE_TOUR = 'has_seen_tour';
+const CLE_NOUVEAUTES = 'has_seen_horizon_v1';
+const CLE_TOUR = 'has_seen_tour_horizon';
 
 async function lireMarqueur(cle: string): Promise<string | null> {
   if (typeof window !== 'undefined' && window.localStorage) {

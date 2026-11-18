@@ -8,7 +8,7 @@ const CSS_DRIVER = `
 .driver-layer::backdrop{display:none}
 .driver-layer .driver-popover{pointer-events:auto}
 .driver-popover{all:unset;font-family:Inter,system-ui,sans-serif;box-sizing:border-box;color:#1E293B;z-index:1000000000;background-color:#fff;border:1px solid #E2E8F0;border-radius:8px;width:min(320px,calc(100vw - 24px));min-width:0;max-width:calc(100vw - 24px);margin:0;padding:15px;position:fixed;top:0;left:0;right:auto;box-shadow:0 1px 2px #0F172A0F}
-#tour-source,#tour-etp,#tour-leviers,#tour-modeles,#tour-generer,#tour-plan,#tour-bilan{scroll-margin:120px}
+#tour-source,#tour-etp,#tour-leviers,#tour-modeles,#tour-generer,#tour-plan,#tour-bilan,#tour-horizon{scroll-margin:120px}
 .driver-popover-title{margin:0;font-size:16px;font-weight:600;line-height:1.4;display:block;position:relative;padding-right:28px}
 .driver-popover-close-btn{all:unset;cursor:pointer;color:#94A3B8;z-index:1;text-align:center;width:32px;height:28px;font-size:18px;position:absolute;top:0;right:0}
 .driver-popover-close-btn:hover{color:#0F2D46}
@@ -39,13 +39,13 @@ export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: str
     id: 'tour-source',
     etape: 1,
     titre: 'Import des flux',
-    texte: 'Importez l’historique de volumes, en fichier local ou par lien Web. DMT, SLA, occupation et shrinkage se règlent sur l’écran de dimensionnement. L’essai Pro complet de 48 h est inclus dès l’inscription.',
+    texte: 'Importez l’historique de volumes. Si le samedi ou le dimanche n’a aucun volume, ce jour n’est pas projeté. L’essai Pro de 48 h est inclus dès l’inscription.',
   },
   {
     id: 'tour-etp',
     etape: 2,
-    titre: 'Planning ETP réels',
-    texte: 'Intégrez le planning des ETP réellement présents pour mesurer les écarts de capacité. Sans fichier, vous pouvez passer cette étape.',
+    titre: 'ETP planifiés',
+    texte: 'Importez le planning des ETP : il pilote les effectifs et verrouille la saisie manuelle. Sans fichier, passez l’étape et renseignez les ETP par file.',
   },
   {
     id: 'tour-leviers',
@@ -60,10 +60,16 @@ export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: str
     texte: 'Comparez Recommandé (Auto), Saisonnalité & Tendances, IA & Machine Learning et le Modèle Hybride. Auto retient le moteur au plus faible WAPE.',
   },
   {
+    id: 'tour-horizon',
+    etape: 4,
+    titre: 'Horizon',
+    texte: 'Choisissez 1, 3, 6 ou 12 mois. L’horizon fixe la période projetée, jusqu’à un an, sans changer le modèle ni le calcul Erlang.',
+  },
+  {
     id: 'tour-restitution',
     etape: 4,
-    titre: 'Plan, synthèse et exports',
-    texte: 'Le plan de production reçoit les ajustements événementiels (% métier). La synthèse exécutive s’ouvre sur la vue globale, puis les exports Excel et PowerPoint emportent le résultat.',
+    titre: 'Vues et fériés',
+    texte: 'Passez en Journalier, Hebdo ou Mensuel. Les fériés se basculent sur leur badge, et l’export Excel suit la vue affichée.',
   },
 ];
 

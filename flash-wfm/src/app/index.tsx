@@ -12,10 +12,12 @@ import { LienReinitialisation } from '../lib/session';
 import { deconnecter } from '../lib/deconnexion';
 import { supabase } from '../lib/supabase';
 import { envoyerRetour, TYPES_RETOUR, type TypeRetour } from '../lib/feedback';
-import { envoyerDemandePro, lienStripePro } from '../lib/proRequest';
+import { envoyerDemandePro, lienStripePro, urlPaiementPro, annulerPaiementApresConnexion } from '../lib/proRequest';
 import PiedLegal from '../components/PiedLegal';
-import { historiqueExemple, lignesModele } from '../lib/exempleHistorique';
-import { appliquerAjustements, periodesAjustables, pourcentagePeriode, saisiePourcentageValide } from '../lib/ajustements';
+import { historiqueExemple, lignesModele, lignesModeleEtp, planningEtpExemple } from '../lib/exempleHistorique';
+import { appliquerAjustements, periodesAjustables, saisiePourcentageValide } from '../lib/ajustements';
+import { MOIS_HORIZON, presenterPlan, type LignePresentee, type MoisHorizon, type VuePlan } from '../lib/vuePlan';
+import { estChomeParDefaut, ferieDuJour, ouvertureWeekend, type FerieColonne } from '../lib/feries';
 import {
   SKILL_DEFAUT,
   VUE_GLOBALE,
@@ -39,10 +41,11 @@ import { useInstallationPwa } from '../lib/installationPwa';
 import {
   couverturesDuPlan,
   ecrireCache,
+  etpDispoPourPeriode,
   cacheDuProprietaire,
   nombre,
   parserPlanningEtp,
-  planMock,
+  planMockJours,
   purgerDonneesTravail,
   type CacheWizard,
   type Etape,
@@ -95,6 +98,19 @@ function planDuSkill(
     return paquet[skill] ?? null;
   }
   return plans[horizon];
+}
+
+function planJournalierDu(
+  skill: string,
+  plansParSkill: PlansSkills,
+  plans: Record<Horizon, PlanLigne[] | null>,
+) {
+  const court = planDuSkill(skill, plansParSkill, plans, 'court_terme');
+  const longs = planDuSkill(skill, plansParSkill, plans, 'long_terme');
+  const estJour = (candidat: PlanLigne[] | null) => !!candidat?.some((ligne) => /^\d{2}\/\d{2}\/\d{4}$/.test(ligne.date));
+  if (estJour(court)) return court;
+  if (estJour(longs)) return longs;
+  return court ?? longs;
 }
 
 function etpSaisiDuSkill(
@@ -297,10 +313,10 @@ function libelleCouverture(valeur: number | null) {
 }
 
 const POINTS_NOUVEAUTES: { icone: React.ComponentProps<typeof Ionicons>['name']; titre: string; texte: string }[] = [
-  { icone: 'options-outline', titre: 'Ajustements événementiels (% métier)', texte: 'Appliquez des hausses ou des baisses manuelles par semaine ou par mois, directement sur le plan de production, avec recalcul de l’ETP.' },
-  { icone: 'bar-chart-outline', titre: 'Synthèse exécutive', texte: 'Ouverture par défaut sur la vue globale (toutes les files) et suivi comparatif du volume brut et du volume ajusté.' },
-  { icone: 'flash-outline', titre: 'Essai Pro 48 h', texte: 'Accès intégral à tous les moteurs IA / ML et aux exports dès la création du compte.' },
-  { icone: 'phone-portrait-outline', titre: 'Application installable', texte: 'Installez Flash WFM en un clic sur ordinateur ou mobile depuis le header.' },
+  { icone: 'calendar-outline', titre: 'Horizon jusqu’à 12 mois', texte: 'Projetez 1, 3, 6 ou 12 mois pour arbitrer les congés longtemps à l’avance. Les modèles et le calcul Erlang restent journaliers.' },
+  { icone: 'grid-outline', titre: 'Vues Journalier, Hebdo et Mensuel', texte: 'Les moyennes hebdo et mensuelles portent sur les jours ouvrés. L’export Excel suit la vue affichée, et un filtre par mois évite de faire défiler tout l’horizon.' },
+  { icone: 'sunny-outline', titre: 'Week-ends et jours fériés', texte: 'Un samedi ou un dimanche absent de l’historique n’est pas projeté. Les 11 fériés français s’affichent en Chômé ou Travaillé : un badge les bascule, et un interrupteur masque les chômés.' },
+  { icone: 'people-outline', titre: 'ETP planifiés', texte: 'Un fichier importé pilote les effectifs, verrouille la saisie manuelle et sert à classer chaque férié selon l’ETP prévu ce jour-là.' },
 ];
 
 function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
@@ -309,7 +325,7 @@ function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: (
       <View style={styles.nouveauteVoile}>
         <View style={styles.nouveaute}>
           <ScrollView style={styles.nouveauteScroll} contentContainerStyle={styles.nouveauteContenu} keyboardShouldPersistTaps="handled">
-            <Text style={styles.nouveauteTitre}>Nouveautés Flash WFM — Version Commerciale</Text>
+            <Text style={styles.nouveauteTitre}>Nouveautés Flash WFM — Pilotage sur 12 mois</Text>
             {POINTS_NOUVEAUTES.map((point) => (
               <View key={point.titre} style={styles.nouveautePoint}>
                 <Ionicons name={point.icone} size={18} color="#0F2D46" />
@@ -426,16 +442,7 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
 
   const ouvrirPaiement = (url: string) => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      if (lienStripe) {
-        const onglet = window.open(url, '_blank', 'noopener,noreferrer');
-        if (!onglet) {
-          setErreur('Le navigateur a bloqué le nouvel onglet. Autorisez les pop-ups pour ouvrir le paiement.');
-          setPaiementOuvert(false);
-          return;
-        }
-      } else {
-        window.location.assign(url);
-      }
+      window.location.assign(url);
     } else {
       void Linking.openURL(url);
     }
@@ -456,40 +463,19 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
   };
 
   const activer = () => {
-    if (lienStripe) {
-      ouvrirPaiement(lienStripe);
-      return;
-    }
-    if (stripeIndispo) {
-      enregistrerDemande();
-      return;
-    }
     if (envoi) return;
     setEnvoi(true);
     setErreur('');
-    void (async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token) {
-          setErreur('Veuillez vous reconnecter.');
-          return;
-        }
-        const data = await creerSessionCheckout(session.access_token);
-        if (typeof data?.url !== 'string' || !data.url) {
-          setStripeIndispo(true);
-          return;
-        }
-        ouvrirPaiement(data.url);
-      } catch (error) {
-        if (error instanceof ErreurApi && error.status === 503) {
-          setStripeIndispo(true);
-          return;
-        }
-        setErreur(error instanceof Error ? error.message : 'Impossible de joindre le serveur de paiement. Réessayez dans un instant.');
-      } finally {
+    void supabase.auth.getUser().then(({ data }) => {
+      const user = data.user;
+      if (!user) {
+        setErreur('Veuillez vous reconnecter.');
         setEnvoi(false);
+        return;
       }
-    })();
+      ouvrirPaiement(urlPaiementPro({ id: user.id, email: user.email }));
+      setEnvoi(false);
+    });
   };
 
   return (
@@ -543,9 +529,8 @@ function ModalePro({ visible, onFermer }: { visible: boolean; onFermer: () => vo
               </View>
             )}
             {erreur ? <Text style={styles.proErreur}>{erreur}</Text> : null}
-            {paiementOuvert ? <Text style={styles.modaleLead}>Le paiement s’est ouvert dans un nouvel onglet.</Text> : null}
-            {lienStripe && !paiementOuvert ? <Text style={styles.modaleLead}>Le paiement s’ouvre dans un nouvel onglet.</Text> : null}
-            {!lienStripe && !stripeIndispo && !paiementOuvert ? <Text style={styles.modaleLead}>Le paiement Stripe s’ouvre dans cet onglet.</Text> : null}
+            {paiementOuvert ? <Text style={styles.modaleLead}>Redirection vers le paiement Stripe.</Text> : null}
+            {!paiementOuvert ? <Text style={styles.modaleLead}>Le paiement Stripe s’ouvre dans cet onglet.</Text> : null}
             {confirme ? null : (
               <TouchableOpacity style={[styles.uploadBtn, envoi && styles.generateBtnDisabled]} onPress={activer} disabled={envoi}>
                 {envoi ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.uploadBtnText}>Activer mon accès Pro</Text>}
@@ -707,11 +692,7 @@ function telechargerModeleEtp() {
     alert("Veuillez ouvrir l'application depuis un navigateur web pour télécharger le fichier Excel.");
     return;
   }
-  const feuille = XLSX.utils.aoa_to_sheet([
-    ['Date', 'ETP'],
-    ['06/10/2026', 12],
-    ['07/10/2026', 11.5],
-  ]);
+  const feuille = XLSX.utils.aoa_to_sheet(lignesModeleEtp());
   feuille['!cols'] = [{ wch: 14 }, { wch: 10 }];
   const classeur = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(classeur, feuille, 'ETP');
@@ -781,6 +762,43 @@ const styleEnteteDate: CSSProperties = {
   fontSize: 13,
 };
 
+const styleEnteteFerie: CSSProperties = {
+  ...styleEnteteDate,
+  minWidth: 148,
+  width: 148,
+  whiteSpace: 'normal',
+  verticalAlign: 'top',
+};
+
+function enteteJour(date: string, ferie: FerieColonne | null, onFerie?: (date: string) => void) {
+  if (!ferie) return dateCourte(date);
+  const chome = ferie.chome;
+  return React.createElement(
+    'div',
+    { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 } },
+    React.createElement('span', null, dateCourte(date)),
+    React.createElement('span', { style: { fontSize: 11, fontWeight: 500, lineHeight: '14px', color: chome ? '#E9D5FF' : '#CBD5E1' } }, ferie.nom),
+    React.createElement(
+      'button',
+      {
+        type: 'button',
+        onClick: () => onFerie?.(date),
+        style: {
+          borderRadius: 8,
+          padding: '4px 8px',
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: 'pointer',
+          background: chome ? '#EDE9FE' : 'transparent',
+          color: chome ? '#5B21B6' : '#E2E8F0',
+          border: chome ? '0' : '1px solid #94A3B8',
+        },
+      },
+      chome ? 'Férié · Chômé' : 'Férié · Travaillé',
+    ),
+  );
+}
+
 const styleEnteteFixe: CSSProperties = {
   ...styleEnteteDate,
   position: 'sticky',
@@ -794,18 +812,18 @@ const styleEnteteFixe: CSSProperties = {
   boxShadow: '4px 0 10px -2px rgba(0,0,0,0.1)',
 };
 
-function styleValeur(alt: boolean, couleur?: string, fort?: boolean): CSSProperties {
+function styleValeur(alt: boolean, couleur?: string, fort?: boolean, fond?: string, large = false): CSSProperties {
   return {
     position: 'relative',
     zIndex: 0,
-    minWidth: 85,
-    width: 85,
+    minWidth: large ? 148 : 85,
+    width: large ? 148 : 85,
     boxSizing: 'border-box',
     textAlign: 'center',
     verticalAlign: 'middle',
     whiteSpace: 'nowrap',
     padding: '12px 8px',
-    backgroundColor: alt ? FOND_LIGNE_ALT : FOND_LIGNE,
+    backgroundColor: fond ?? (alt ? FOND_LIGNE_ALT : FOND_LIGNE),
     color: couleur ?? '#1E293B',
     fontWeight: fort ? 700 : 400,
     fontSize: 14,
@@ -869,7 +887,7 @@ function lignesPlan(plan: PlanLigne[], couvertures: LigneCouverture[] | null, et
   return lignes;
 }
 
-function TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; etpPlanifies: (number | null)[] | null; volumeAjuste: boolean }) {
+function TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste, feries, onFerie }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; etpPlanifies: (number | null)[] | null; volumeAjuste: boolean; feries?: (FerieColonne | null)[] | null; onFerie?: (date: string) => void }) {
   const lignes = lignesPlan(plan, couvertures, etpPlanifies, volumeAjuste);
   return React.createElement(
     'div',
@@ -884,7 +902,10 @@ function TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste }: { pla
           'tr',
           null,
           React.createElement('th', { style: styleEnteteFixe }, 'Période'),
-          plan.map((row, index) => React.createElement('th', { key: `d-${index}`, style: styleEnteteDate }, dateCourte(row.date))),
+          plan.map((row, index) => {
+            const ferie = feries?.[index] ?? null;
+            return React.createElement('th', { key: `d-${index}`, style: ferie ? styleEnteteFerie : styleEnteteDate }, enteteJour(row.date, ferie, onFerie));
+          }),
         ),
       ),
       React.createElement(
@@ -894,7 +915,10 @@ function TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste }: { pla
           'tr',
           { key: ligne.libelle },
           React.createElement('td', { style: styleLibelle(ligne.alt) }, ligne.libelle),
-          ligne.cellules.map((cellule) => React.createElement('td', { key: cellule.key, style: styleValeur(ligne.alt, cellule.couleur, cellule.fort) }, cellule.texte)),
+          ligne.cellules.map((cellule, index) => {
+            const ferie = feries?.[index] ?? null;
+            return React.createElement('td', { key: cellule.key, style: styleValeur(ligne.alt, cellule.couleur, cellule.fort, ferie?.chome ? '#F5F3FF' : undefined, !!ferie) }, cellule.texte);
+          }),
         )),
       ),
     ),
@@ -938,10 +962,10 @@ function GrilleAjustements({ plan, saisies, onSaisie }: { plan: PlanLigne[]; sai
   );
 }
 
-function HorizontalPlan({ plan, couvertures, etpPlanifies, volumeAjuste }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; etpPlanifies: (number | null)[] | null; volumeAjuste: boolean }) {
+function HorizontalPlan({ plan, couvertures, etpPlanifies, volumeAjuste, feries, onFerie }: { plan: PlanLigne[]; couvertures: LigneCouverture[] | null; etpPlanifies: (number | null)[] | null; volumeAjuste: boolean; feries?: (FerieColonne | null)[] | null; onFerie?: (date: string) => void }) {
   if (plan.length === 0) return null;
   if (Platform.OS === 'web') {
-    return <View style={styles.hTable}>{TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste })}</View>;
+    return <View style={styles.hTable}>{TableauPlanWeb({ plan, couvertures, etpPlanifies, volumeAjuste, feries, onFerie })}</View>;
   }
 
   const lignes = lignesPlan(plan, couvertures, etpPlanifies, volumeAjuste);
@@ -951,16 +975,30 @@ function HorizontalPlan({ plan, couvertures, etpPlanifies, volumeAjuste }: { pla
         <View>
           <View style={styles.hRow}>
             <Text style={[styles.hLabel, styles.hLabelHead]} numberOfLines={1}>Période</Text>
-            {plan.map((row, index) => (
-              <Text key={`d-${index}`} style={styles.hHeadCell} numberOfLines={1}>{dateCourte(row.date)}</Text>
-            ))}
+            {plan.map((row, index) => {
+              const ferie = feries?.[index] ?? null;
+              return (
+                <View key={`d-${index}`} style={[styles.hHeadCell, ferie && styles.hHeadFerie]}>
+                  <Text style={styles.hHeadTexte}>{dateCourte(row.date)}</Text>
+                  {ferie ? <Text style={styles.hFerieNom}>{ferie.nom}</Text> : null}
+                  {ferie ? (
+                    <TouchableOpacity style={[styles.badgeFerie, ferie.chome ? styles.badgeChome : styles.badgeTravaille]} onPress={() => onFerie?.(row.date)} accessibilityRole="button">
+                      <Text style={[styles.badgeFerieTexte, ferie.chome ? styles.badgeChomeTexte : styles.badgeTravailleTexte]}>{ferie.chome ? 'Férié · Chômé' : 'Férié · Travaillé'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              );
+            })}
           </View>
           {lignes.map((ligne) => (
             <View key={ligne.libelle} style={[styles.hRow, ligne.alt && styles.hRowAlt]}>
               <Text style={[styles.hLabel, ligne.alt && styles.hLabelAlt]} numberOfLines={1}>{ligne.libelle}</Text>
-              {ligne.cellules.map((cellule) => (
-                <Text key={cellule.key} numberOfLines={1} style={[styles.hCell, cellule.fort && styles.hCellFort, cellule.couleur ? { color: cellule.couleur } : null]}>{cellule.texte}</Text>
-              ))}
+              {ligne.cellules.map((cellule, index) => {
+                const ferie = feries?.[index] ?? null;
+                return (
+                  <Text key={cellule.key} numberOfLines={1} style={[styles.hCell, ferie && styles.hCellFerie, ferie?.chome && styles.hCellChome, cellule.fort && styles.hCellFort, cellule.couleur ? { color: cellule.couleur } : null]}>{cellule.texte}</Text>
+                );
+              })}
             </View>
           ))}
         </View>
@@ -979,6 +1017,8 @@ type ExportPlan = {
   heuresOuverture: number;
   modele: string;
   horizonLabel: string;
+  vueLabel: string;
+  lignesVues: LignePresentee[];
   typeFlux: TypeFlux;
   delaiSlaJours: number;
   tauxOccupation: number;
@@ -987,11 +1027,20 @@ type ExportPlan = {
   perimetre: string;
 };
 
-function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, typeFlux, delaiSlaJours, tauxOccupation, couvertures, etpPlanifies, perimetre }: ExportPlan) {
+function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heuresOuverture, modele, horizonLabel, vueLabel, lignesVues, typeFlux, delaiSlaJours, tauxOccupation, couvertures, etpPlanifies, perimetre }: ExportPlan) {
   const planAjuste = appliquerAjustements(plan, saisies);
-  const volumeBrut = plan.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
-  const volumeAjuste = planAjuste.reduce((somme, ligne) => somme + ligne.volume_prevu, 0);
-  const etpMoyen = planAjuste.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / planAjuste.length;
+  const source = lignesVues.length ? lignesVues : planAjuste.map((ligne, index) => ({
+    periodeExcel: ligne.date,
+    volumeBrut: plan[index]?.volume_prevu ?? ligne.volume_prevu,
+    volumeAjuste: ligne.volume_prevu,
+    etpRequis: ligne.etp_moyen_requis,
+    etpPlanifie: etpPlanifies?.[index] ?? couvertures?.[index]?.etpDispo ?? null,
+    ecart: couvertures?.[index]?.ecart ?? null,
+    couverture: couvertures?.[index]?.couverture ?? null,
+  }));
+  const volumeBrut = source.reduce((somme, ligne) => somme + ligne.volumeBrut, 0);
+  const volumeAjuste = source.reduce((somme, ligne) => somme + ligne.volumeAjuste, 0);
+  const etpMoyen = source.length ? source.reduce((somme, ligne) => somme + ligne.etpRequis, 0) / source.length : 0;
   const fluxFroid = typeFlux === 'froid';
   const libelleDelai = fluxFroid ? 'Délai SLA (jours)' : 'SLA cible (%)';
   const valeurDelai = fluxFroid ? delaiSlaJours : sla;
@@ -1015,20 +1064,21 @@ function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heu
     ["Heures d'ouverture", heuresOuverture],
     ['Modèle', modele],
     ['Horizon', horizonLabel],
+    ['Vue', vueLabel],
     ['Volume brut modèle', volumeBrut],
     ['Volume ajusté manager', volumeAjuste],
     ['ETP moyen', Number(etpMoyen.toFixed(2))],
     [],
     ['Période', 'Volume brut modèle', 'Ajustement (%)', 'Volume ajusté manager', 'ETP requis', libelleDelai, 'ETP planifiés', ...(avecCouverture ? ['Écart ETP', 'Couverture (%)'] : [])],
-    ...plan.map((ligne, index) => {
-      const ajuste = planAjuste[index] ?? ligne;
-      const planifie = etpPlanifies?.[index] ?? couvertures?.[index]?.etpDispo;
-      const base: (string | number)[] = [ligne.date, ligne.volume_prevu, pourcentagePeriode(ligne.date, saisies), ajuste.volume_prevu, ajuste.etp_moyen_requis, valeurDelai, planifie != null ? Number(planifie.toFixed(2)) : ''];
+    ...source.map((ligne) => {
+      const ajustement = ligne.volumeBrut > 0 && ligne.volumeAjuste !== ligne.volumeBrut
+        ? Number((((ligne.volumeAjuste - ligne.volumeBrut) / ligne.volumeBrut) * 100).toFixed(1))
+        : '';
+      const base: (string | number)[] = [ligne.periodeExcel, ligne.volumeBrut, ajustement, ligne.volumeAjuste, ligne.etpRequis, valeurDelai, ligne.etpPlanifie != null ? Number(ligne.etpPlanifie.toFixed(2)) : ''];
       if (!couvertures) return base;
-      const couverture = couvertures[index];
       base.push(
-        couverture?.ecart != null ? Number(couverture.ecart.toFixed(2)) : '',
-        couverture?.couverture != null ? Number(couverture.couverture.toFixed(1)) : '',
+        ligne.ecart != null ? Number(ligne.ecart.toFixed(2)) : '',
+        ligne.couverture != null ? Number(ligne.couverture.toFixed(1)) : '',
       );
       return base;
     }),
@@ -1149,36 +1199,6 @@ function messageHttp(status: number, detail: string) {
   if (status === 401) return "Vous n'êtes pas authentifié. Veuillez vous reconnecter.";
   if (status === 403) return "Accès refusé : abonnement Pro requis ou essai gratuit expiré.";
   return `Erreur HTTP ${status}`;
-}
-
-async function creerSessionCheckout(token: string) {
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}/create-checkout-session`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({}),
-    });
-  } catch (error) {
-    throw new Error('Impossible de joindre le serveur de paiement. Réessayez dans un instant.');
-  }
-  const texte = await response.text();
-  let data: { url?: string; detail?: string; message?: string } | null = null;
-  if (texte) {
-    try {
-      data = JSON.parse(texte);
-    } catch {
-      data = null;
-    }
-  }
-  if (!response.ok) {
-    const detail = typeof data?.detail === 'string' ? data.detail : typeof data?.message === 'string' ? data.message : '';
-    throw new ErreurApi(response.status, messageHttp(response.status, detail));
-  }
-  return data ?? {};
 }
 
 async function creerSessionPortail(token: string) {
@@ -1376,6 +1396,11 @@ export default function FlashWFM() {
   const [tauxOccupation, setTauxOccupation] = useState('85');
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<Horizon>('court_terme');
+  const [moisHorizon, setMoisHorizon] = useState<MoisHorizon>(1);
+  const [vuePlan, setVuePlan] = useState<VuePlan>('journalier');
+  const [moisFiltre, setMoisFiltre] = useState<string | null>(null);
+  const [masquerFeriesChomes, setMasquerFeriesChomes] = useState(false);
+  const [choixFeries, setChoixFeries] = useState<Record<string, boolean>>({});
   const [plans, setPlans] = useState<Record<Horizon, PlanLigne[] | null>>(plansVides());
   const [plansParSkill, setPlansParSkill] = useState<PlansSkills>(plansSkillsVides());
   const [ciblesSkills, setCiblesSkills] = useState<Record<string, SkillConfig>>({});
@@ -1411,14 +1436,19 @@ export default function FlashWFM() {
   const [comparatif, setComparatif] = useState<{ cle: string; holt: PaquetModele | null; light: PaquetModele | null } | null>(null);
   const [cachePret, setCachePret] = useState(false);
   const suspendrePersistance = useRef(false);
+  const demoACalculer = useRef(false);
   const series = useMemo(() => (dataPreview ? analyserHistorique(dataPreview) : []), [dataPreview]);
   const multi = series.length > 1;
   const skillCourant = skillAffiche(skillActif, multi, series);
   const skillSyntheseCourant = skillAffiche(skillSynthese, multi, series);
   const perimetre = series.length ? (multi ? libellePerimetre(skillCourant) : series[0].skill) : SKILL_DEFAUT;
+  const planStocke = useMemo(
+    () => planJournalierDu(skillCourant, plansParSkill, plans),
+    [skillCourant, plansParSkill, plans],
+  );
   const plan = useMemo(
-    () => planDuSkill(skillCourant, plansParSkill, plans, horizon),
-    [skillCourant, plansParSkill, plans, horizon],
+    () => (planStocke ? planStocke.slice(0, moisHorizon * 30) : null),
+    [planStocke, moisHorizon],
   );
   const ajustementsActifs = hasProAccess && ajustementsOuverts;
   const saisiesAjustement = ajustementsActifs ? ajustementsSaisis : AJUSTEMENTS_VIDES;
@@ -1428,6 +1458,35 @@ export default function FlashWFM() {
   );
   const planningActif = hasProAccess && etpStatut === 'valide' && !!etpPlanning?.length;
   const fichierEtpCharge = !!(etpFileName && ((etpPlanning?.length ?? 0) > 0 || (etpBrouillon?.length ?? 0) > 0));
+  const weekendOuvert = useMemo(() => {
+    const lignes = !multi || skillCourant === VUE_GLOBALE
+      ? series.flatMap((serie) => serie.lignes)
+      : (series.find((serie) => serie.skill === skillCourant)?.lignes ?? []);
+    return ouvertureWeekend(lignes);
+  }, [multi, skillCourant, series]);
+  const feriesCourants = useMemo(() => {
+    const carte: Record<string, FerieColonne> = {};
+    const source = fichierEtpCharge ? (etpPlanning?.length ? etpPlanning : etpBrouillon) : null;
+    for (const ligne of planAjuste ?? []) {
+      const ferie = ferieDuJour(ligne.date);
+      if (!ferie) continue;
+      const impose = Object.prototype.hasOwnProperty.call(choixFeries, ligne.date) ? choixFeries[ligne.date] : null;
+      const etp = source ? etpDispoPourPeriode(ligne.date, source) : null;
+      carte[ligne.date] = { nom: ferie.nom, chome: impose ?? estChomeParDefaut(ferie, etp) };
+    }
+    return carte;
+  }, [planAjuste, fichierEtpCharge, etpPlanning, etpBrouillon, choixFeries]);
+  const basculerFerie = (date: string) => {
+    const ferie = ferieDuJour(date);
+    if (!ferie) return;
+    setChoixFeries((actuel) => {
+      const source = fichierEtpCharge ? (etpPlanning?.length ? etpPlanning : etpBrouillon) : null;
+      const courant = Object.prototype.hasOwnProperty.call(actuel, date)
+        ? actuel[date]
+        : estChomeParDefaut(ferie, source ? etpDispoPourPeriode(date, source) : null);
+      return { ...actuel, [date]: !courant };
+    });
+  };
   const dmtFichier = useMemo(() => dmtPondere(series), [series]);
   const etpSaisieVue = useMemo(
     () => etpSaisiDuSkill(skillCourant, multi, series, ciblesSkills, etpMoyensAppliques),
@@ -1451,6 +1510,23 @@ export default function FlashWFM() {
     if (!fichierEtpCharge && etpSaisieVue != null) return planAjuste.map(() => etpSaisieVue);
     return planAjuste.map(() => null);
   }, [planAjuste, fichierEtpCharge, etpPlanning, etpBrouillon, etpSaisieVue, multi, skillCourant]);
+  const presentation = useMemo(() => {
+    if (!plan || !planAjuste) return null;
+    return presenterPlan({
+      brut: plan,
+      ajuste: planAjuste,
+      etpPlanifies,
+      avecCouverture: couvertures != null,
+      vue: vuePlan,
+      moisFiltre: vuePlan === 'journalier' && moisHorizon > 1 ? moisFiltre : null,
+      weekendOuvert,
+      feries: feriesCourants,
+      masquerChomes: masquerFeriesChomes,
+    });
+  }, [plan, planAjuste, etpPlanifies, couvertures, vuePlan, moisHorizon, moisFiltre, weekendOuvert, feriesCourants, masquerFeriesChomes]);
+  useEffect(() => {
+    if (moisFiltre && presentation && !presentation.mois.some((mois) => mois.id === moisFiltre)) setMoisFiltre(null);
+  }, [moisFiltre, presentation]);
   const periodesSansEtp = !!couvertures && planningVue && couvertures.some((ligne) => ligne.etpDispo == null);
   const socleCibles = useMemo(() => ({
     aht, sla, shrinkage, tempsCible, tauxOccupation, heuresOuverture, delaiTraitementHeures,
@@ -1464,7 +1540,8 @@ export default function FlashWFM() {
     [planningVue, couvertures, etpSaisieVue],
   );
   const cadreSynthese = useMemo(() => {
-    const planCible = planDuSkill(skillSyntheseCourant, plansParSkill, plans, horizon);
+    const planCibleStocke = planJournalierDu(skillSyntheseCourant, plansParSkill, plans);
+    const planCible = planCibleStocke ? planCibleStocke.slice(0, moisHorizon * 30) : null;
     const etpSaisie = etpSaisiDuSkill(skillSyntheseCourant, multi, series, ciblesSkills, etpMoyensAppliques);
     const vueFichierSynthese = fichierEtpCharge && (!multi || skillSyntheseCourant === VUE_GLOBALE);
     const source = etpPlanning?.length ? etpPlanning : etpBrouillon;
@@ -1484,7 +1561,7 @@ export default function FlashWFM() {
       holt: vueDesPlans(comparatif?.holt ?? null, skillSyntheseCourant),
       light: vueDesPlans(comparatif?.light ?? null, skillSyntheseCourant),
     };
-  }, [skillSyntheseCourant, plansParSkill, plans, horizon, multi, series, ciblesSkills, etpMoyensAppliques, fichierEtpCharge, etpPlanning, etpBrouillon, hasProAccess, socleCibles, comparatif]);
+  }, [skillSyntheseCourant, plansParSkill, plans, horizon, moisHorizon, multi, series, ciblesSkills, etpMoyensAppliques, fichierEtpCharge, etpPlanning, etpBrouillon, hasProAccess, socleCibles, comparatif]);
 
   const appliquerVierge = useCallback(() => {
     setCurrentStep(1);
@@ -1506,6 +1583,11 @@ export default function FlashWFM() {
     setTauxOccupation('85');
     setSelectedModel(null);
     setHorizon('court_terme');
+    setMoisHorizon(1);
+    setVuePlan('journalier');
+    setMoisFiltre(null);
+    setMasquerFeriesChomes(false);
+    setChoixFeries({});
     setPlans(plansVides());
     setPlansParSkill(plansSkillsVides());
     setCiblesSkills({});
@@ -1541,6 +1623,7 @@ export default function FlashWFM() {
     setTauxOccupation(cache.tauxOccupation);
     setSelectedModel(modeleConnu(cache.selectedModel) ? cache.selectedModel : null);
     setHorizon(cache.horizon);
+    setMoisHorizon(cache.horizon === 'long_terme' ? 12 : 1);
     setPlans(cache.plans);
     setPlansParSkill(cache.plansParSkill);
     setCiblesSkills(cache.ciblesSkills);
@@ -1553,6 +1636,28 @@ export default function FlashWFM() {
     if (!profile || hasProAccess) return;
     if (selectedModel !== MODELE_LIBRE) setSelectedModel(MODELE_LIBRE);
   }, [profile, hasProAccess, selectedModel]);
+
+  const relireProfil = useRef(assurerDroits);
+  relireProfil.current = assurerDroits;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('payment') !== 'success') return;
+    annulerPaiementApresConnexion();
+    params.delete('payment');
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+    setMessagePaiement('Licence Pro activée !');
+    relireProfil.current();
+    let essais = 0;
+    const identifiant = window.setInterval(() => {
+      essais += 1;
+      relireProfil.current();
+      if (essais >= 4) window.clearInterval(identifiant);
+    }, 2000);
+    return () => window.clearInterval(identifiant);
+  }, []);
 
   useEffect(() => {
     if (currentStep === 4) setSkillSynthese(VUE_GLOBALE);
@@ -1746,16 +1851,37 @@ export default function FlashWFM() {
     });
   }, [series, aht, sla, tempsCible, shrinkage, tauxOccupation, heuresOuverture, delaiTraitementHeures, backlog]);
 
+  const poserPlanningExemple = () => {
+    const planning = planningEtpExemple();
+    setEtpFileName('Planning ETP d\'exemple');
+    setEtpBrouillon(planning);
+    setEtpPlanning(planning);
+    setEtpStatut('valide');
+    return planning.length;
+  };
+
   const chargerExemple = () => {
     const lignes = historiqueExemple();
     setFileName('Données d\'exemple');
     setDataPreview(lignes);
     setCiblesSkills({});
     setSkillActif(VUE_GLOBALE);
+    setHorizon('court_terme');
+    setMoisHorizon(1);
+    setVuePlan('journalier');
+    setMoisFiltre(null);
+    setMasquerFeriesChomes(false);
+    setChoixFeries({});
+    setSelectedModel(MODELE_LIBRE);
+    setAjustementsOuverts(false);
+    setAjustementsSaisis({});
     oublierPlans();
     const moyenneDmt = dmtPondere(analyserHistorique(lignes));
     if (moyenneDmt != null) setAht(String(moyenneDmt));
-    setToast('3 semaines d\'exemple sont chargées sur les files Accueil et Support.');
+    const jours = poserPlanningExemple();
+    demoACalculer.current = true;
+    avancer(4);
+    setToast(`Files Accueil et Support jusqu'à hier, et ${jours.toLocaleString('fr-FR')} jours d'ETP sur la période de prévision.`);
   };
 
   const chargerExempleEtp = () => {
@@ -1763,22 +1889,8 @@ export default function FlashWFM() {
       setModalePro(true);
       return;
     }
-    const ancre = new Date();
-    ancre.setHours(12, 0, 0, 0);
-    const planning: EtpJour[] = [];
-    for (let decalage = 10; decalage >= 1; decalage -= 1) {
-      const date = new Date(ancre);
-      date.setDate(ancre.getDate() - decalage);
-      const weekend = date.getDay() === 0 || date.getDay() === 6;
-      const jour = String(date.getDate()).padStart(2, '0');
-      const mois = String(date.getMonth() + 1).padStart(2, '0');
-      planning.push({ date: `${jour}/${mois}/${date.getFullYear()}`, etp: weekend ? 4 : 12 });
-    }
-    setEtpFileName('Données d\'exemple');
-    setEtpBrouillon(planning);
-    setEtpPlanning(null);
-    setEtpStatut('vide');
-    setToast('10 jours d\'exemple sont chargés. Validez le planning pour continuer.');
+    const jours = poserPlanningExemple();
+    setToast(`${jours.toLocaleString('fr-FR')} jours d'ETP d'exemple couvrent les prochaines semaines et les mois à venir.`);
   };
 
   const avancer = (etape: Etape) => {
@@ -1810,22 +1922,19 @@ export default function FlashWFM() {
     setPaiementEnCours(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      const user = session?.user;
+      if (!user) {
         alert('Veuillez vous reconnecter');
         return;
       }
-      const data = await creerSessionCheckout(session.access_token);
-      if (typeof data?.url !== 'string' || !data.url) {
-        alert('Session de paiement indisponible.');
-        return;
-      }
+      const url = urlPaiementPro({ id: user.id, email: user.email });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.location.assign(data.url);
+        window.location.assign(url);
         return;
       }
-      await Linking.openURL(data.url);
-    } catch (error) {
-      alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur de paiement. Réessayez dans un instant.');
+      await Linking.openURL(url);
+    } catch {
+      alert('Impossible d’ouvrir le paiement. Réessayez dans un instant.');
     } finally {
       setPaiementEnCours(false);
     }
@@ -1874,6 +1983,7 @@ export default function FlashWFM() {
       }
       setFileName(asset.name);
       setDataPreview(jsonData);
+      setChoixFeries({});
       setCiblesSkills({});
       setSkillActif(VUE_GLOBALE);
       oublierPlans();
@@ -1903,6 +2013,7 @@ export default function FlashWFM() {
       }
       setFileName(url);
       setDataPreview(jsonData);
+      setChoixFeries({});
       setCiblesSkills({});
       setSkillActif(VUE_GLOBALE);
       if (userId) void enregistrerLienSource(userId, url);
@@ -1940,6 +2051,7 @@ export default function FlashWFM() {
       setEtpBrouillon(planning);
       setEtpPlanning(null);
       setEtpStatut('vide');
+      setChoixFeries({});
       if (userId) void enregistrerLienEtp(userId, url);
     } catch (error) {
       alert(error instanceof ErreurApi ? error.message : 'Impossible de joindre le serveur pour lire ce lien.');
@@ -1969,6 +2081,7 @@ export default function FlashWFM() {
       setEtpBrouillon(planning);
       setEtpPlanning(null);
       setEtpStatut('vide');
+      setChoixFeries({});
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Erreur lors de la lecture du planning ETP.');
     }
@@ -1995,6 +2108,7 @@ export default function FlashWFM() {
     setEtpPlanning(null);
     setEtpStatut('vide');
     setUrlEtp('');
+    setChoixFeries({});
   };
 
   const socleConfig = () => ({
@@ -2062,27 +2176,28 @@ export default function FlashWFM() {
 
   const seriesActives = (): SerieSkill[] => (series.length ? series : [{ skill: SKILL_DEFAUT, lignes: [], dmtMoyen: null, volumeTotal: 0 }]);
 
-  const poserPlans = (horizonDemande: Horizon, paquet: Record<string, PlanLigne[]>) => {
-    setPlansParSkill((actuel) => ({ ...actuel, [horizonDemande]: paquet }));
-    setPlans((actuel) => ({ ...actuel, [horizonDemande]: consoliderPlans(Object.values(paquet)) }));
+  const poserPlanAnnee = (paquet: Record<string, PlanLigne[]>) => {
+    setPlansParSkill({ court_terme: paquet, long_terme: null });
+    setPlans({ court_terme: consoliderPlans(Object.values(paquet)), long_terme: null });
+    setHorizon('court_terme');
   };
 
-  const basculerMock = (horizonDemande: Horizon, mode: string) => {
+  const basculerMock = (mode: string) => {
     if (mode === 'Auto' || mode === 'Hybride') {
       const holt: PaquetModele = {};
       const light: PaquetModele = {};
       for (const serie of seriesActives()) {
-        const fictif = comparatifMock(horizonDemande, serie.lignes.map((ligne) => ligne.volume));
+        const fictif = comparatifMock(serie.lignes.map((ligne) => ligne.volume));
         holt[serie.skill] = fictif.holt;
         light[serie.skill] = fictif.light;
       }
-      poserPlans(horizonDemande, composerPlans(mode, holt, light));
+      poserPlanAnnee(composerPlans(mode, holt, light));
     } else {
       const paquet: Record<string, PlanLigne[]> = {};
       for (const serie of seriesActives()) {
-        paquet[serie.skill] = planMock(horizonDemande, serie.lignes.map((ligne) => ligne.volume));
+        paquet[serie.skill] = planMockJours(12, serie.lignes.map((ligne) => ligne.volume));
       }
-      poserPlans(horizonDemande, paquet);
+      poserPlanAnnee(paquet);
     }
     setToast('API injoignable — Mode Mock Dev');
   };
@@ -2123,7 +2238,8 @@ export default function FlashWFM() {
     const entrees = await Promise.all(actif.map(async (serie) => {
       const data = await postApi('/prevision_plan', {
         modele,
-        horizon: horizonDemande,
+        horizon: 'court_terme',
+        nb_mois: 12,
         donnees: serie.lignes.map((ligne) => ({ date: ligne.date, volume: ligne.volume, file: serie.skill })),
         parametres_erlang: parametresPour(serie),
         skill: serie.skill,
@@ -2156,14 +2272,13 @@ export default function FlashWFM() {
       alert("Aucune donnée importée. Revenez à l'étape 1 pour importer votre fichier Excel.");
       return;
     }
-    const horizonDemande = horizon;
     setLoading(true);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
       if (!token) {
         if (__DEV__) {
-          basculerMock(horizonDemande, modeleChoisi);
+          basculerMock(modeleChoisi);
           return;
         }
         alert('Session expirée. Veuillez vous reconnecter.');
@@ -2172,18 +2287,18 @@ export default function FlashWFM() {
       let plansSeuls: Record<string, PlanLigne[]>;
       if (modeleChoisi === 'Auto' || modeleChoisi === 'Hybride') {
         const [holt, light] = await Promise.all([
-          prevoirPaquet('Holt-Winters', token, true, horizonDemande),
-          prevoirPaquet('LightGBM', token, true, horizonDemande),
+          prevoirPaquet('Holt-Winters', token, true, 'court_terme'),
+          prevoirPaquet('LightGBM', token, true, 'court_terme'),
         ]);
         plansSeuls = composerPlans(modeleChoisi, holt, light);
       } else {
-        const paquet = await prevoirPaquet(modeleChoisi, token, false, horizonDemande);
+        const paquet = await prevoirPaquet(modeleChoisi, token, false, 'court_terme');
         plansSeuls = Object.fromEntries(Object.entries(paquet).map(([skill, resultat]) => [skill, resultat.plan]));
       }
-      poserPlans(horizonDemande, plansSeuls);
+      poserPlanAnnee(plansSeuls);
     } catch (error) {
       if (__DEV__ && (echecApiSimulable(error) || error instanceof ErreurApi)) {
-        basculerMock(horizonDemande, modeleChoisi);
+        basculerMock(modeleChoisi);
       } else if (error instanceof ErreurApi && error.status === 403 && error.message.includes('Droits utilisateur introuvables')) {
         assurerDroits();
       } else if (error instanceof ErreurApi && (error.status === 401 || error.status === 403)) {
@@ -2200,6 +2315,12 @@ export default function FlashWFM() {
     }
   };
 
+  useEffect(() => {
+    if (!demoACalculer.current || !dataPreview?.length || !etpPlanning?.length || selectedModel !== MODELE_LIBRE) return;
+    demoACalculer.current = false;
+    void handleGenerate();
+  }, [dataPreview, etpPlanning, selectedModel]);
+
   const ouvrirSynthese = async () => {
     setSkillSynthese(VUE_GLOBALE);
     setSyntheseOuverte(true);
@@ -2211,7 +2332,7 @@ export default function FlashWFM() {
       const holt: PaquetModele = {};
       const light: PaquetModele = {};
       for (const serie of seriesActives()) {
-        const fictif = comparatifMock(horizon, serie.lignes.map((ligne) => ligne.volume));
+        const fictif = comparatifMock(serie.lignes.map((ligne) => ligne.volume));
         holt[serie.skill] = fictif.holt;
         light[serie.skill] = fictif.light;
       }
@@ -2268,7 +2389,8 @@ export default function FlashWFM() {
       setModalePro(true);
       return;
     }
-    if (!plan || !planAjuste) return;
+    if (!plan || !planAjuste || !presentation) return;
+    const libelleVue = vuePlan === 'journalier' ? 'Journalier' : vuePlan === 'hebdo' ? 'Hebdo' : 'Mensuel';
     exporterPlanExcel({
       plan,
       saisies: saisiesAjustement,
@@ -2278,7 +2400,9 @@ export default function FlashWFM() {
       shrinkage: parseFloat(ciblesVue.shrinkage) || 25,
       heuresOuverture: parseFloat(ciblesVue.amplitude) || 8,
       modele: libelleModele(selectedModel),
-      horizonLabel: horizon === 'court_terme' ? 'Court terme' : 'Long terme',
+      horizonLabel: `${moisHorizon} mois`,
+      vueLabel: libelleVue,
+      lignesVues: presentation.lignes,
       typeFlux,
       delaiSlaJours: delaiJoursDepuisHeures(ciblesVue.delaiTraitement),
       tauxOccupation: parseInt(ciblesVue.occupation, 10) || 85,
@@ -2321,10 +2445,15 @@ export default function FlashWFM() {
     void handleGenerate();
   };
 
-  const volumeTotal = planAjuste?.reduce((somme, ligne) => somme + ligne.volume_prevu, 0) ?? 0;
-  const etpMoyenRequis = planAjuste && planAjuste.length ? planAjuste.reduce((somme, ligne) => somme + ligne.etp_moyen_requis, 0) / planAjuste.length : 0;
-  const couvertureMoyenne = couvertures
-    ? moyenne(couvertures.map((ligne) => ligne.couverture).filter((valeur): valeur is number => valeur != null))
+  const lignesIndicateurs = (presentation?.lignes ?? []).filter((ligne) => !ligne.ferie?.chome);
+  const volumeTotal = lignesIndicateurs.reduce((somme, ligne) => somme + ligne.volumeAjuste, 0);
+  const etpMoyenRequis = lignesIndicateurs.length ? lignesIndicateurs.reduce((somme, ligne) => somme + ligne.etpRequis, 0) / lignesIndicateurs.length : 0;
+  const couvertureMoyenne = presentation?.couvertures
+    ? moyenne(presentation.lignes.flatMap((ligne, index) => {
+      if (ligne.ferie?.chome) return [];
+      const couverture = presentation.couvertures?.[index]?.couverture;
+      return couverture != null ? [couverture] : [];
+    }))
     : null;
 
   return (
@@ -2335,7 +2464,7 @@ export default function FlashWFM() {
             abonnementActif={abonnementActif}
             paiementEnCours={paiementEnCours}
             onAbonnement={abonnementActif ? gererAbonnement : passerAuPro}
-            onPasserPro={() => setModalePro(true)}
+            onPasserPro={() => { void passerAuPro(); }}
             onReinitialiser={reinitialiser}
             onFeedback={() => setFeedbackOuvert(true)}
           />
@@ -2394,7 +2523,7 @@ export default function FlashWFM() {
                 onValider={importerEtpLien}
                 enCours={lienEnCours === 'etp'}
                 titre="Importer un planning d'ETP jour par jour (.xlsx)"
-                detail="Colonne 1 = date, colonne 2 = ETP. Court terme : jour par jour. Long terme : moyenne du mois."
+                detail="Colonne 1 = date, colonne 2 = ETP. Le fichier reste jour par jour : les vues hebdo et mensuelle en font la moyenne."
                 onFichier={() => { void pickEtp(); }}
                 onModele={telechargerModeleEtp}
                 onExemple={chargerExempleEtp}
@@ -2523,15 +2652,18 @@ export default function FlashWFM() {
           {currentStep === 4 ? (
             <View nativeID="tour-bilan" style={styles.panel}>
               <Text style={styles.panelTitle}>Étape 4 : Restitution et horizon</Text>
-              <View style={styles.horizonRow}>
-                <TouchableOpacity style={[styles.horizonBtn, horizon === 'court_terme' && styles.modelBtnActive]} onPress={() => setHorizon('court_terme')}>
-                  <Text style={[styles.modelBtnText, horizon === 'court_terme' && styles.modelBtnTextActive]}>Court terme</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.horizonBtn, horizon === 'long_terme' && styles.modelBtnActive]} onPress={() => setHorizon('long_terme')}>
-                  <Text style={[styles.modelBtnText, horizon === 'long_terme' && styles.modelBtnTextActive]}>Long terme</Text>
-                </TouchableOpacity>
+              <View nativeID="tour-horizon" style={tourId === 'tour-horizon' ? styles.tourCible : undefined}>
+                <Text style={styles.vueLabel}>Horizon</Text>
+                <View style={styles.horizonRow}>
+                  {MOIS_HORIZON.map((mois) => (
+                    <TouchableOpacity key={mois} style={[styles.horizonBtn, moisHorizon === mois && styles.modelBtnActive]} onPress={() => { setMoisHorizon(mois); setMoisFiltre(null); }}>
+                      <Text style={[styles.modelBtnText, moisHorizon === mois && styles.modelBtnTextActive]}>{mois} mois</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.hint}>L'horizon fixe la période projetée, jusqu'à 12 mois. La vue change seulement l'affichage et l'export.</Text>
               </View>
-              <Text style={styles.hint}>Court terme : 30 jours. Long terme : 12 mois. Le modèle sert à projeter les volumes avant le calcul d’ETP.</Text>
+              {planStocke && planStocke.length < moisHorizon * 30 ? <Text style={styles.hint}>Ce plan couvre {planStocke.length.toLocaleString('fr-FR')} jours. Recalculez pour projeter {moisHorizon} mois.</Text> : null}
 
               <View nativeID="tour-modeles" style={[styles.modelRow, tourId === 'tour-modeles' && styles.tourCible]}>
                 {MODES_PREVISION.map((mode) => {
@@ -2649,7 +2781,7 @@ export default function FlashWFM() {
                       <Text style={[styles.statValue, { color: couleurCouverture(couvertureMoyenne) }]}>{couvertureMoyenne != null ? texteCouverture(couvertureMoyenne) : '—'}</Text>
                     </View>
                   </View>
-                  <CombinedChart points={(planAjuste ?? plan).map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
+                  <CombinedChart points={(presentation?.plan ?? planAjuste ?? plan ?? []).map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
                   <View nativeID="tour-plan" style={[styles.planHeader, tourId === 'tour-restitution' && styles.tourCible]}>
                     <Text style={styles.planHeaderTitle}>Plan de production</Text>
                     <View style={styles.planActions}>
@@ -2690,6 +2822,39 @@ export default function FlashWFM() {
                   {planningVue ? <Text style={styles.hint}>Écart et couverture calculés à partir du planning ETP importé.</Text> : null}
                   {fichierEtpCharge && multi && skillCourant !== VUE_GLOBALE ? <Text style={styles.hint}>Le fichier ETP s’applique à la vue Toutes files.</Text> : null}
                   {periodesSansEtp ? <Text style={styles.hint}>Certaines périodes du plan n’ont pas de correspondance dans le fichier ETP.</Text> : null}
+                  <Text style={styles.vueLabel}>Vue</Text>
+                  <View style={styles.horizonRow}>
+                    {([['journalier', 'Journalier'], ['hebdo', 'Hebdo'], ['mensuel', 'Mensuel']] as const).map(([id, libelle]) => (
+                      <TouchableOpacity key={id} style={[styles.horizonBtn, vuePlan === id && styles.modelBtnActive]} onPress={() => setVuePlan(id)}>
+                        <Text style={[styles.modelBtnText, vuePlan === id && styles.modelBtnTextActive]}>{libelle}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {vuePlan === 'journalier' && moisHorizon > 1 && presentation?.mois.length ? (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtreMois}>
+                      <TouchableOpacity style={[styles.filtrePuce, moisFiltre == null && styles.modelBtnActive]} onPress={() => setMoisFiltre(null)}>
+                        <Text style={[styles.modelBtnText, moisFiltre == null && styles.modelBtnTextActive]}>Tous les mois</Text>
+                      </TouchableOpacity>
+                      {presentation.mois.map((mois) => (
+                        <TouchableOpacity key={mois.id} style={[styles.filtrePuce, moisFiltre === mois.id && styles.modelBtnActive]} onPress={() => setMoisFiltre(mois.id)}>
+                          <Text style={[styles.modelBtnText, moisFiltre === mois.id && styles.modelBtnTextActive]}>{mois.libelle}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  ) : null}
+                  {vuePlan !== 'journalier' ? <Text style={styles.hint}>Moyenne quotidienne des ETP sur les jours ouvrés et les week-ends actifs. Les week-ends sans historique et les fériés chômés ne sont pas comptés.</Text> : null}
+                  <TouchableOpacity
+                    style={styles.interrupteur}
+                    onPress={() => setMasquerFeriesChomes((actif) => !actif)}
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: masquerFeriesChomes }}
+                    accessibilityLabel="Masquer les fériés chômés"
+                  >
+                    <View style={[styles.piste, masquerFeriesChomes && styles.pisteActive]}>
+                      <View style={[styles.curseur, masquerFeriesChomes && styles.curseurActif]} />
+                    </View>
+                    <Text style={styles.interrupteurTexte}>Masquer les fériés chômés</Text>
+                  </TouchableOpacity>
                   {ajustementsActifs ? (
                     <GrilleAjustements
                       plan={plan}
@@ -2697,7 +2862,7 @@ export default function FlashWFM() {
                       onSaisie={(cle, texte) => setAjustementsSaisis((actuel) => ({ ...actuel, [cle]: texte }))}
                     />
                   ) : null}
-                  <HorizontalPlan plan={planAjuste ?? plan} couvertures={couvertures} etpPlanifies={etpPlanifies} volumeAjuste={ajustementsActifs} />
+                  <HorizontalPlan plan={presentation?.plan ?? plan} couvertures={presentation ? presentation.couvertures : couvertures} etpPlanifies={presentation ? presentation.etpPlanifies : etpPlanifies} volumeAjuste={ajustementsActifs} feries={vuePlan === 'journalier' ? presentation?.lignes.map((ligne) => ligne.ferie) : null} onFerie={basculerFerie} />
                 </View>
               ) : null}
             </View>
@@ -2763,8 +2928,8 @@ export default function FlashWFM() {
   );
 }
 
-function comparatifMock(horizonDemande: Horizon, volumes: number[]) {
-  const base = planMock(horizonDemande, volumes);
+function comparatifMock(volumes: number[]) {
+  const base = planMockJours(12, volumes);
   const varier = (facteur: number, wape: number): ResultatModele => ({
     wape,
     plan: base.map((ligne) => ({
@@ -2911,8 +3076,11 @@ const styles = StyleSheet.create({
   generateBtn: { marginTop: 10, backgroundColor: '#7FC8C0', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center', minHeight: 40 },
   generateBtnDisabled: { opacity: 0.7 },
   generateBtnText: { color: '#0F2D46', fontSize: 14, fontWeight: '600', textAlign: 'center' },
-  horizonRow: { flexDirection: 'row', width: '100%', gap: 12, marginBottom: 8 },
-  horizonBtn: { flex: 1, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  horizonRow: { flexDirection: 'row', flexWrap: 'wrap', width: '100%', gap: 12, marginBottom: 8 },
+  vueLabel: { color: '#687581', fontSize: 12, fontWeight: '600', marginBottom: 6, marginTop: 4 },
+  filtreMois: { flexDirection: 'row', gap: 8, paddingVertical: 4, marginBottom: 8 },
+  filtrePuce: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  horizonBtn: { flexGrow: 1, flexBasis: 96, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   dashScroll: { flexGrow: 1, alignItems: 'center', padding: 16, paddingBottom: 220 },
   dash: { width: '100%', maxWidth: 1100, alignItems: 'stretch' },
   panel: { backgroundColor: '#FFFFFF', padding: 24, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', width: '100%', marginBottom: 16, shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
@@ -2991,8 +3159,25 @@ const styles = StyleSheet.create({
   hLabel: { width: 210, minWidth: 210, paddingVertical: 12, paddingHorizontal: 16, color: '#1E293B', fontWeight: '500', fontSize: 14, backgroundColor: '#FFFFFF', flexShrink: 0 },
   hLabelAlt: { backgroundColor: '#F8FAFC' },
   hLabelHead: { backgroundColor: '#0F172A', color: '#F8FAFC', fontWeight: '600', fontSize: 13 },
-  hHeadCell: { width: 85, minWidth: 85, paddingVertical: 12, paddingHorizontal: 8, textAlign: 'center', color: '#F8FAFC', fontWeight: '600', fontSize: 13, backgroundColor: '#0F172A', flexShrink: 0 },
+  hHeadCell: { width: 85, minWidth: 85, paddingVertical: 12, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F172A', flexShrink: 0, gap: 4 },
+  hHeadFerie: { width: 148, minWidth: 148 },
+  hHeadTexte: { color: '#F8FAFC', fontWeight: '600', fontSize: 13, textAlign: 'center' },
+  hFerieNom: { color: '#E9D5FF', fontSize: 11, fontWeight: '500', textAlign: 'center' },
+  badgeFerie: { borderRadius: 8, paddingVertical: 4, paddingHorizontal: 8, alignItems: 'center' },
+  badgeChome: { backgroundColor: '#EDE9FE' },
+  badgeTravaille: { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#94A3B8' },
+  badgeFerieTexte: { fontSize: 11, fontWeight: '600' },
+  badgeChomeTexte: { color: '#5B21B6' },
+  badgeTravailleTexte: { color: '#E2E8F0' },
   hCell: { width: 85, minWidth: 85, paddingVertical: 12, paddingHorizontal: 8, textAlign: 'center', color: '#1E293B', fontSize: 14, flexShrink: 0 },
+  hCellFerie: { width: 148, minWidth: 148 },
+  hCellChome: { backgroundColor: '#F5F3FF' },
+  interrupteur: { flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'flex-start', minHeight: 40, marginBottom: 8 },
+  piste: { width: 36, height: 20, borderRadius: 10, backgroundColor: '#E2E8F0', padding: 2, justifyContent: 'center' },
+  pisteActive: { backgroundColor: '#0F2D46' },
+  curseur: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#FFFFFF' },
+  curseurActif: { alignSelf: 'flex-end' },
+  interrupteurTexte: { color: '#1E293B', fontSize: 13, fontWeight: '500' },
   hCellFort: { fontWeight: '700' },
   hint: { color: '#687581', fontSize: 12, lineHeight: 16, marginTop: 6 },
   stepper: { flexDirection: 'row', width: '100%', marginBottom: 16, gap: 8 },
