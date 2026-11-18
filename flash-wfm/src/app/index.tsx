@@ -22,6 +22,7 @@ import {
   SKILL_DEFAUT,
   VUE_GLOBALE,
   analyserHistorique,
+  compterLignesEcartees,
   configSkill,
   consoliderPlans,
   dmtPondere,
@@ -58,6 +59,22 @@ import {
 } from '../lib/wizard';
 
 const MESSAGE_HISTORIQUE = 'Format invalide. Colonnes attendues : Date et Volume. Une colonne Skill, File ou Activité est optionnelle. La DMT peut occuper une colonne dédiée.';
+const MESSAGE_DEMARRAGE = "Démarrage du moteur de calcul en cours (jusqu'à 1 minute lors de la première requête)...";
+const TYPES_TABLEUR = [
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/csv',
+  'text/comma-separated-values',
+  'application/csv',
+  '.csv',
+];
+
+function messageLignesEcartees(nombreLignes: number) {
+  const libelle = nombreLignes.toLocaleString('fr-FR');
+  return nombreLignes > 1
+    ? `${libelle} lignes ont été écartées : date ou volume illisible.`
+    : `${libelle} ligne a été écartée : date ou volume illisible.`;
+}
 
 const API_BASE = __DEV__ && Platform.OS === 'web'
   ? 'http://127.0.0.1:8000'
@@ -313,10 +330,10 @@ function libelleCouverture(valeur: number | null) {
 }
 
 const POINTS_NOUVEAUTES: { icone: React.ComponentProps<typeof Ionicons>['name']; titre: string; texte: string }[] = [
-  { icone: 'calendar-outline', titre: 'Horizon jusqu’à 12 mois', texte: 'Projetez 1, 3, 6 ou 12 mois pour arbitrer les congés longtemps à l’avance. Les modèles et le calcul Erlang restent journaliers.' },
-  { icone: 'grid-outline', titre: 'Vues Journalier, Hebdo et Mensuel', texte: 'Les moyennes hebdo et mensuelles portent sur les jours ouvrés. L’export Excel suit la vue affichée, et un filtre par mois évite de faire défiler tout l’horizon.' },
+  { icone: 'calendar-outline', titre: 'Horizon', texte: 'Le Plan Découverte gratuit projette 7 jours. Le plan Pro ouvre 1, 3, 6 ou 12 mois. Les modèles et le calcul Erlang restent journaliers.' },
+  { icone: 'grid-outline', titre: 'Vues Journalier, Hebdo et Mensuel', texte: 'Les moyennes hebdo et mensuelles portent sur les jours ouvrés. L’export Excel, réservé au plan Pro, suit la vue affichée.' },
   { icone: 'sunny-outline', titre: 'Week-ends et jours fériés', texte: 'Un samedi ou un dimanche absent de l’historique n’est pas projeté. Les 11 fériés français s’affichent en Chômé ou Travaillé : un badge les bascule, et un interrupteur masque les chômés.' },
-  { icone: 'people-outline', titre: 'ETP planifiés', texte: 'Un fichier importé pilote les effectifs, verrouille la saisie manuelle et sert à classer chaque férié selon l’ETP prévu ce jour-là.' },
+  { icone: 'people-outline', titre: 'ETP planifiés', texte: 'Le Plan Découverte couvre une seule file, saisie à la main. L’import du planning ETP, qui verrouille cette saisie, est réservé au plan Pro.' },
 ];
 
 function ModaleNouveautes({ visible, onFermer }: { visible: boolean; onFermer: () => void }) {
@@ -368,7 +385,7 @@ function ModaleFeedback({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onFermer}>
       <View style={styles.voile}>
         <View style={styles.modale}>
-          <Text style={styles.modaleTitre}>Une idée ? / Feedback</Text>
+          <Text style={styles.modaleTitre}>Une idée ?</Text>
           <Text style={styles.modaleLead}>Dites-nous ce qui vous aiderait, ou ce qui bloque.</Text>
           <View style={styles.puces}>
             {TYPES_RETOUR.map((option) => {
@@ -624,7 +641,7 @@ function HeaderLogo({
           </TouchableOpacity>
         ) : null}
         <TouchableOpacity style={styles.resetBtn} onPress={onFeedback}>
-          <Text style={styles.resetText}>Une idée ? / Feedback</Text>
+          <Text style={styles.resetText}>Une idée ?</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.resetBtn} onPress={onReinitialiser}>
           <Text style={styles.resetText}>Réinitialiser</Text>
@@ -1058,7 +1075,7 @@ function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heu
           ['SLA cible (%)', sla],
           ['Temps cible SLA (secondes)', tempsCible],
         ]),
-    ['Shrinkage (%)', shrinkage],
+    ['Indisponibilité (%)', shrinkage],
     ["Heures d'ouverture", heuresOuverture],
     ['Modèle', modele],
     ['Horizon', horizonLabel],
@@ -1140,7 +1157,7 @@ function exporterPlanExcel({ plan, saisies, aht, sla, tempsCible, shrinkage, heu
     const libelle = String(lignes[ligne - 1]?.[0] ?? '');
     const fond = ligne % 2 === 0 ? { patternType: 'solid', fgColor: { rgb: 'F7F6F1' } } : undefined;
     poser(`A${ligne}`, { ...styleLibelle, fill: fond });
-    const format = libelle.startsWith('Volume') ? '#,##0' : libelle.startsWith('ETP') ? '0.00' : libelle.startsWith('Heures') ? '0.0' : /AHT|SLA|Délai|Occupation|Shrinkage|Temps/.test(libelle) ? '0' : undefined;
+    const format = libelle.startsWith('Volume') ? '#,##0' : libelle.startsWith('ETP') ? '0.00' : libelle.startsWith('Heures') ? '0.0' : /AHT|SLA|Délai|Occupation|Indisponibilité|Temps/.test(libelle) ? '0' : undefined;
     poser(`B${ligne}`, { ...styleValeur, fill: fond }, format);
   }
   for (let colonne = 0; colonne < nbColonnes; colonne += 1) {
@@ -1229,37 +1246,51 @@ async function creerSessionPortail(token: string) {
   return data ?? {};
 }
 
+function relancerReseau(error: unknown) {
+  if (error instanceof ErreurApi) return false;
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'AbortError' || error.name === 'TypeError') return true;
+  return /failed to fetch|network|timeout|load failed/i.test(error.message);
+}
+
 async function postApi(path: string, body: unknown, timeoutMs = 5000, token: string) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`${API_BASE}${path}`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const texte = await response.text();
-    let data: { statut?: string; message?: string; plan?: PlanLigne[]; wape?: number | null; detail?: string } | null = null;
-    if (texte) {
-      try {
-        data = JSON.parse(texte);
-      } catch {
-        data = null;
+  let dernier: unknown;
+  for (let essai = 0; essai < 2; essai += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const texte = await response.text();
+      let data: { statut?: string; message?: string; plan?: PlanLigne[]; wape?: number | null; detail?: string } | null = null;
+      if (texte) {
+        try {
+          data = JSON.parse(texte);
+        } catch {
+          data = null;
+        }
       }
+      if (!response.ok) {
+        const detail = typeof data?.detail === 'string' ? data.detail : typeof data?.message === 'string' ? data.message : '';
+        throw new ErreurApi(response.status, messageHttp(response.status, detail));
+      }
+      return data ?? {};
+    } catch (error) {
+      dernier = error;
+      if (essai === 1 || !relancerReseau(error)) throw error;
+    } finally {
+      clearTimeout(timer);
     }
-    if (!response.ok) {
-      const detail = typeof data?.detail === 'string' ? data.detail : typeof data?.message === 'string' ? data.message : '';
-      throw new ErreurApi(response.status, messageHttp(response.status, detail));
-    }
-    return data ?? {};
-  } finally {
-    clearTimeout(timer);
   }
+  throw dernier;
 }
 
 async function lireFeuille(uri: string) {
@@ -1269,7 +1300,17 @@ async function lireFeuille(uri: string) {
   if (!arrayBuffer.byteLength) throw new Error('Le fichier est vide.');
   let workbook: ReturnType<typeof XLSX.read>;
   try {
-    workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    const octets = new Uint8Array(arrayBuffer);
+    const estClasseur = octets[0] === 0x50 && octets[1] === 0x4b;
+    if (estClasseur) {
+      workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    } else {
+      const texte = new TextDecoder('utf-8').decode(arrayBuffer).replace(/^\uFEFF/, '');
+      const entete = texte.split(/\r?\n/, 1)[0] ?? '';
+      const pointVirgules = entete.split(';').length;
+      const virgules = entete.split(',').length;
+      workbook = XLSX.read(texte, { type: 'string', FS: pointVirgules > virgules ? ';' : ',', raw: false });
+    }
   } catch {
     throw new Error('Format invalide. Le fichier doit être un CSV ou un classeur Excel (.xlsx).');
   }
@@ -1287,7 +1328,7 @@ async function importerUrl(url: string) {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
   if (!token) throw new ErreurApi(401, 'Session expirée. Veuillez vous reconnecter.');
-  const data = await postApi('/import', { url }, 20000, token) as { lignes?: Record<string, unknown>[] };
+  const data = await postApi('/import', { url }, 45000, token) as { lignes?: Record<string, unknown>[] };
   if (!Array.isArray(data.lignes)) {
     throw new ErreurApi(400, 'Format invalide. Le fichier doit être un CSV ou un classeur Excel (.xlsx).');
   }
@@ -1326,7 +1367,7 @@ function ZoneImport({
           <Text style={[styles.importTabText, mode === 'fichier' && styles.importTabTextOn]}>Fichier local</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.importTab, mode === 'lien' && styles.importTabOn]} onPress={() => onMode('lien')}>
-          <Text style={[styles.importTabText, mode === 'lien' && styles.importTabTextOn]}>Lien Web (Sheets / 365)</Text>
+          <Text style={[styles.importTabText, mode === 'lien' && styles.importTabTextOn]}>Lien Web (tableur en ligne)</Text>
         </TouchableOpacity>
       </View>
       {mode === 'fichier' ? (
@@ -1410,8 +1451,8 @@ export default function FlashWFM() {
   const [ajustementsOuverts, setAjustementsOuverts] = useState(false);
   const [ajustementsSaisis, setAjustementsSaisis] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
-  const { userId, hasProAccess, abonnementActif, assurerDroits, profile } = useAuth();
-  const proVerrouille = profile != null && !hasProAccess;
+  const { userId, hasProAccess, profilPret, assurerDroits, profile } = useAuth();
+  const proVerrouille = !profilPret || !hasProAccess;
   const [modalePro, setModalePro] = useState(false);
   const [paiementEnCours, setPaiementEnCours] = useState(false);
   const [messagePaiement, setMessagePaiement] = useState<string | null>(null);
@@ -1971,17 +2012,18 @@ export default function FlashWFM() {
 
   const pickDocument = async () => {
     const result = await DocumentPicker.getDocumentAsync({
-      type: ['application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      type: TYPES_TABLEUR,
     });
     if (result.canceled) return;
     const asset = result.assets[0];
     try {
       const jsonData = await lireFeuille(asset.uri);
       const reconnu = analyserHistorique(jsonData);
+      const ecartees = compterLignesEcartees(jsonData);
       if (!reconnu.length) {
         setDataPreview(null);
         setFileName(null);
-        alert(MESSAGE_HISTORIQUE);
+        alert(ecartees > 0 ? `${MESSAGE_HISTORIQUE} ${messageLignesEcartees(ecartees)}` : MESSAGE_HISTORIQUE);
         return;
       }
       setFileName(asset.name);
@@ -1992,6 +2034,7 @@ export default function FlashWFM() {
       oublierPlans();
       const moyenneDmt = dmtPondere(reconnu);
       if (moyenneDmt != null) setAht(String(moyenneDmt));
+      if (ecartees > 0) alert(messageLignesEcartees(ecartees));
     } catch (error) {
       setDataPreview(null);
       alert(error instanceof Error ? error.message : 'Erreur lors de la lecture du fichier Excel.');
@@ -2008,10 +2051,11 @@ export default function FlashWFM() {
     try {
       const jsonData = await importerUrl(url);
       const reconnu = analyserHistorique(jsonData);
+      const ecartees = compterLignesEcartees(jsonData);
       if (!reconnu.length) {
         setDataPreview(null);
         setFileName(null);
-        alert(MESSAGE_HISTORIQUE);
+        alert(ecartees > 0 ? `${MESSAGE_HISTORIQUE} ${messageLignesEcartees(ecartees)}` : MESSAGE_HISTORIQUE);
         return;
       }
       setFileName(url);
@@ -2023,6 +2067,7 @@ export default function FlashWFM() {
       oublierPlans();
       const moyenneDmt = dmtPondere(reconnu);
       if (moyenneDmt != null) setAht(String(moyenneDmt));
+      if (ecartees > 0) alert(messageLignesEcartees(ecartees));
     } catch (error) {
       setDataPreview(null);
       setFileName(null);
@@ -2069,7 +2114,7 @@ export default function FlashWFM() {
       return;
     }
     const result = await DocumentPicker.getDocumentAsync({
-      type: ['application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      type: TYPES_TABLEUR,
     });
     if (result.canceled) return;
     const asset = result.assets[0];
@@ -2242,13 +2287,13 @@ export default function FlashWFM() {
       const data = await postApi('/prevision_plan', {
         modele,
         horizon: 'court_terme',
-        nb_mois: 12,
+        ...(proVerrouille ? { nb_jours: 7 } : { nb_mois: 12 }),
         donnees: serie.lignes.map((ligne) => ({ date: ligne.date, volume: ligne.volume, file: serie.skill })),
         parametres_erlang: parametresPour(serie),
         skill: serie.skill,
         skill_configs: payloadSkillConfigs(ciblesSkills),
         evaluer_wape: evaluer,
-      }, 60000, token);
+      }, 120000, token);
       if (!data || data.statut !== 'succès' || !Array.isArray(data.plan)) {
         throw new ErreurApi(400, typeof data?.message === 'string' ? data.message : 'Données invalides');
       }
@@ -2464,9 +2509,9 @@ export default function FlashWFM() {
       <ScrollView contentContainerStyle={styles.dashScroll} keyboardShouldPersistTaps="handled">
         <View style={styles.dash}>
           <HeaderLogo
-            abonnementActif={abonnementActif}
+            abonnementActif={profile?.plan === 'pro'}
             paiementEnCours={paiementEnCours}
-            onAbonnement={abonnementActif ? gererAbonnement : passerAuPro}
+            onAbonnement={profile?.plan === 'pro' ? gererAbonnement : passerAuPro}
             onPasserPro={() => { void passerAuPro(); }}
             onReinitialiser={reinitialiser}
             onFeedback={() => setFeedbackOuvert(true)}
@@ -2475,6 +2520,11 @@ export default function FlashWFM() {
           {messagePaiement ? (
             <View style={styles.successBox}>
               <Text style={styles.successText}>{messagePaiement}</Text>
+            </View>
+          ) : null}
+          {loading || lienEnCours ? (
+            <View style={styles.successBox}>
+              <Text style={styles.successText}>{MESSAGE_DEMARRAGE}</Text>
             </View>
           ) : null}
 
@@ -2571,7 +2621,7 @@ export default function FlashWFM() {
                   <Text style={[styles.fluxDetail, typeFlux === 'chaud' && styles.fluxDetailOn]}>Calculs basés sur Erlang C.</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.fluxCard, typeFlux === 'froid' && styles.fluxCardOn]} onPress={() => choisirFlux('froid')}>
-                  <Text style={[styles.fluxTitle, typeFlux === 'froid' && styles.fluxTitleOn]}>Flux Froid (Mails, Tickets, Backlog)</Text>
+                  <Text style={[styles.fluxTitle, typeFlux === 'froid' && styles.fluxTitleOn]}>Flux froid (e-mails, tickets, encours)</Text>
                   <Text style={[styles.fluxDetail, typeFlux === 'froid' && styles.fluxDetailOn]}>Calculs basés sur un modèle linéaire.</Text>
                 </TouchableOpacity>
               </View>
@@ -2615,15 +2665,15 @@ export default function FlashWFM() {
                           ['dmt', 'DMT cible (s)'],
                           ['sla', 'SLA (%)'],
                           ['delaiCible', 'Délai cible (s)'],
-                          ['shrinkage', 'Shrinkage (%)'],
+                          ['shrinkage', 'Indisponibilité (%)'],
                           ['occupation', 'Occupation (%)'],
                           ['amplitude', 'Amplitude (h)'],
                         ]
                       : [
                           ['dmt', 'DMT cible (s)'],
                           ['delaiTraitement', 'Délai (h)'],
-                          ['backlog', 'Backlog'],
-                          ['shrinkage', 'Shrinkage (%)'],
+                          ['backlog', 'Encours'],
+                          ['shrinkage', 'Indisponibilité (%)'],
                           ['occupation', 'Occupation (%)'],
                           ['amplitude', 'Amplitude (h)'],
                           ['heuresTravaillees', 'Heures / jour / ETP'],
@@ -2771,7 +2821,7 @@ export default function FlashWFM() {
                 </View>
               </View>
 
-              <View nativeID="tour-generer" style={tourId === 'tour-restitution' && !plan ? styles.tourCible : undefined}>
+              <View nativeID="tour-generer" style={tourId === 'tour-restitution' ? styles.tourCible : undefined}>
               <TouchableOpacity style={[styles.generateBtn, loading && styles.generateBtnDisabled]} onPress={handleGenerate} disabled={loading}>
                 {loading ? <ActivityIndicator color="#0F2D46" /> : <Text style={styles.generateBtnText}>{plan ? 'Recalculer le plan de production' : 'Générer le plan de production'}</Text>}
               </TouchableOpacity>
@@ -2807,7 +2857,7 @@ export default function FlashWFM() {
                     </View>
                   </View>
                   <CombinedChart points={(presentation?.plan ?? planAjuste ?? plan ?? []).map((row) => ({ label: dateCourte(row.date), volume: row.volume_prevu, etp: row.etp_moyen_requis }))} />
-                  <View nativeID="tour-plan" style={[styles.planHeader, tourId === 'tour-restitution' && styles.tourCible]}>
+                  <View nativeID="tour-plan" style={styles.planHeader}>
                     <Text style={styles.planHeaderTitle}>Plan de production</Text>
                     <View style={styles.planActions}>
                       <TouchableOpacity

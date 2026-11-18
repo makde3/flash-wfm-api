@@ -137,6 +137,7 @@ class PrevisionRequest(BaseModel):
     skill: str | None = None
     skill_configs: Dict[str, SkillConfigPayload] | None = None
     nb_mois: int | None = None
+    nb_jours: int | None = None
 
 def calcul_erlang_c(agents, traffic):
     if not math.isfinite(agents) or not math.isfinite(traffic) or agents <= 0 or traffic < 0 or agents <= traffic:
@@ -250,7 +251,11 @@ def parser_un_volume(valeur):
         return np.nan
     if isinstance(valeur, (int, float)) and not isinstance(valeur, bool):
         return float(valeur) if math.isfinite(float(valeur)) else np.nan
-    texte = str(valeur).strip().replace('\u00a0', '').replace(' ', '').replace(',', '.')
+    texte = str(valeur).strip().replace('\u00a0', '').replace('\u202f', '').replace(' ', '')
+    if ',' in texte and '.' in texte:
+        texte = texte.replace('.', '').replace(',', '.') if texte.rfind(',') > texte.rfind('.') else texte.replace(',', '')
+    else:
+        texte = texte.replace(',', '.')
     return pd.to_numeric(texte, errors='coerce')
 
 def debut_prevision(est_court_terme, maintenant):
@@ -825,7 +830,20 @@ def customer_id_enregistre(user_id: str) -> str | None:
             return str(ligne["stripe_customer_id"])
     return None
 
-def customer_id_par_email(user_id: str) -> str | None:
+def emails_compte(user_id: str) -> list[str]:
+    trouves: list[str] = []
+
+    def ajouter(valeur: object) -> None:
+        email = str(valeur or "").strip()
+        if email and email not in trouves:
+            trouves.append(email)
+
+    try:
+        reponse = client_service().auth.admin.get_user_by_id(user_id)
+        user = getattr(reponse, "user", None)
+        ajouter(getattr(user, "email", None) if user is not None else None)
+    except Exception:
+        print("-> Lecture de l'email d'authentification impossible", flush=True)
     try:
         reponse = (
             client_service().table("profiles")
@@ -834,15 +852,15 @@ def customer_id_par_email(user_id: str) -> str | None:
             .limit(1)
             .execute()
         )
+        lignes = reponse.data or []
+        ajouter(lignes[0].get("email") if lignes else "")
     except HTTPException:
         raise
     except Exception:
         print("-> Lecture de l'email impossible", flush=True)
-        return None
-    lignes = reponse.data or []
-    email = str((lignes[0].get("email") if lignes else "") or "").strip()
-    if not email:
-        return None
+    return trouves
+
+def identifiant_client_stripe(email: str) -> str | None:
     trouves = stripe.Customer.list(email=email, limit=1)
     clients = getattr(trouves, "data", None)
     if clients is None and hasattr(trouves, "to_dict"):
@@ -854,6 +872,13 @@ def customer_id_par_email(user_id: str) -> str | None:
     if not identifiant and isinstance(premier, dict):
         identifiant = premier.get("id")
     return str(identifiant) if identifiant else None
+
+def customer_id_par_email(user_id: str) -> str | None:
+    for email in emails_compte(user_id):
+        identifiant = identifiant_client_stripe(email)
+        if identifiant:
+            return identifiant
+    return None
 
 @app.post("/create-portal-session")
 def creer_session_portail(authorization: str | None = Header(default=None)):
@@ -1014,13 +1039,13 @@ def lire_tableau(contenu: bytes, nom: str, type_contenu: str) -> pd.DataFrame:
     est_classeur = not est_csv and (nom_bas.endswith((".xlsx", ".xlsm", ".xls")) or "spreadsheet" in type_bas or "excel" in type_bas or contenu[:2] == b"PK")
     if est_classeur:
         return pd.read_excel(io.BytesIO(contenu), engine="openpyxl")
-    cadre = pd.read_csv(io.BytesIO(contenu), sep=None, engine="python", encoding="utf-8-sig")
+    cadre = pd.read_csv(io.BytesIO(contenu), sep=None, engine="python", encoding="utf-8-sig", dtype=str)
     if cadre.shape[1] == 1:
         entete = contenu.decode("utf-8-sig", errors="replace").splitlines()[0] if contenu else ""
         if ";" in entete:
-            cadre = pd.read_csv(io.BytesIO(contenu), sep=";", encoding="utf-8-sig")
+            cadre = pd.read_csv(io.BytesIO(contenu), sep=";", encoding="utf-8-sig", dtype=str)
         elif "\t" in entete:
-            cadre = pd.read_csv(io.BytesIO(contenu), sep="\t", encoding="utf-8-sig")
+            cadre = pd.read_csv(io.BytesIO(contenu), sep="\t", encoding="utf-8-sig", dtype=str)
     return cadre
 
 def lignes_depuis_octets(contenu: bytes, nom: str, type_contenu: str) -> list[dict]:
@@ -1114,6 +1139,26 @@ def erlang_depuis_config(requete: PrevisionRequest) -> ErlangRequest:
         data["heures_travaillees"] = float(cfg.heures_travaillees)
     return ErlangRequest(**data)
 
+def nom_file(ligne: dict) -> str | None:
+    for cle in ("file", "skill", "File", "Skill"):
+        valeur = ligne.get(cle)
+        if isinstance(valeur, str) and valeur.strip():
+            return valeur.strip()
+    return None
+
+def premiere_file(donnees: list) -> list:
+    vues: list[str] = []
+    for ligne in donnees:
+        if not isinstance(ligne, dict):
+            continue
+        nom = nom_file(ligne)
+        if nom and nom not in vues:
+            vues.append(nom)
+    if len(vues) <= 1:
+        return donnees
+    garde = vues[0]
+    return [ligne for ligne in donnees if isinstance(ligne, dict) and nom_file(ligne) == garde]
+
 @app.post("/prevision_plan")
 def generer_plan_production(requete: PrevisionRequest, authorization: str | None = Header(default=None)):
     requete = requete.model_copy(update={"parametres_erlang": erlang_depuis_config(requete)})
@@ -1122,7 +1167,11 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
     user_id = identite_depuis_authorization(authorization)
     profil = lire_profil(user_id)
     profil["created_at"] = date_creation_compte(user_id, profil)
-    verifier_droit_modele(requete.modele, profil, abonnement_pro_actif(user_id))
+    pro_actif = abonnement_pro_actif(user_id)
+    verifier_droit_modele(requete.modele, profil, pro_actif)
+    decouverte = not (pro_actif or profil.get("plan") == "pro" or profil.get("role") == "admin")
+    if decouverte:
+        requete = requete.model_copy(update={"donnees": premiere_file(list(requete.donnees))})
 
     df = pd.DataFrame(requete.donnees)
     if df.empty or 'date' not in df.columns or 'volume' not in df.columns:
@@ -1138,9 +1187,14 @@ def generer_plan_production(requete: PrevisionRequest, authorization: str | None
             "message": "Aucune date ou volume exploitable. Formats acceptes : jj/mm/aaaa, aaaa-mm-jj, ou numero de serie Excel.",
         }
 
-    mois_demandes = requete.nb_mois if requete.nb_mois in (1, 3, 6, 12) else None
-    est_court_terme = mois_demandes is not None or requete.horizon == 'court_terme'
-    nb_steps_jour = mois_demandes * 30 if mois_demandes else (30 if est_court_terme else 365)
+    if decouverte:
+        mois_demandes = None
+        est_court_terme = True
+        nb_steps_jour = 7
+    else:
+        mois_demandes = requete.nb_mois if requete.nb_mois in (1, 3, 6, 12) else None
+        est_court_terme = mois_demandes is not None or requete.horizon == 'court_terme'
+        nb_steps_jour = mois_demandes * 30 if mois_demandes else (30 if est_court_terme else 365)
     date_depart = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     dates_futur = pd.date_range(debut_prevision(True if mois_demandes else est_court_terme, date_depart), periods=nb_steps_jour, freq='D')
     

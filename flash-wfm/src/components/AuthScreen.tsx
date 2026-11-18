@@ -3,6 +3,7 @@ import { ActivityIndicator, Modal, SafeAreaView, ScrollView, StyleSheet, Text, T
 import { Ionicons } from '@expo/vector-icons';
 
 import PiedLegal from './PiedLegal';
+import type { IdDocumentLegal } from '../constants/legal';
 import { LienReinitialisation } from '../lib/session';
 import { supabase } from '../lib/supabase';
 
@@ -80,11 +81,13 @@ export default function AuthScreen({ modeInitial = 'connexion', emailConfirme = 
   const [loading, setLoading] = useState(false);
   const [compteCree, setCompteCree] = useState<string | null>(null);
   const [renvoi, setRenvoi] = useState<'repos' | 'envoi' | 'envoye' | 'erreur'>('repos');
+  const [certifiePro, setCertifiePro] = useState(false);
+  const [documentLegal, setDocumentLegal] = useState<IdDocumentLegal | null>(null);
 
   const inscription = mode === 'inscription';
   const reglesOk = REGLES.every((regle) => regle.test(password));
   const correspond = password.length > 0 && password === confirmation;
-  const inscriptionValide = reglesOk && correspond;
+  const inscriptionValide = reglesOk && correspond && certifiePro;
   const confirmationSaisie = confirmation.length > 0;
 
   const basculerMode = () => {
@@ -93,6 +96,7 @@ export default function AuthScreen({ modeInitial = 'connexion', emailConfirme = 
     setConfirmation('');
     setVoirMotDePasse(false);
     setVoirConfirmation(false);
+    setCertifiePro(false);
   };
 
   const retourConnexion = () => {
@@ -110,7 +114,10 @@ export default function AuthScreen({ modeInitial = 'connexion', emailConfirme = 
       setMessage('Indiquez un e-mail et un mot de passe.');
       return;
     }
-    if (inscription && !inscriptionValide) return;
+    if (inscription && !inscriptionValide) {
+      if (!certifiePro) setMessage('Cochez la certification professionnelle et l’acceptation des CGU/CGV.');
+      return;
+    }
     setLoading(true);
     setMessage('');
     if (inscription) onInscription?.();
@@ -216,6 +223,23 @@ export default function AuthScreen({ modeInitial = 'connexion', emailConfirme = 
               {confirmationSaisie && !correspond ? (
                 <Text style={styles.erreur}>Les mots de passe ne correspondent pas.</Text>
               ) : null}
+              <View style={styles.certification}>
+                <TouchableOpacity
+                  onPress={() => setCertifiePro((actuel) => !actuel)}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: certifiePro }}
+                  accessibilityLabel="Je certifie agir en tant que professionnel pour les besoins de mon activité et j'accepte les CGU/CGV"
+                  style={styles.case}
+                >
+                  <Ionicons name={certifiePro ? 'checkbox' : 'square-outline'} size={20} color="#0F2D46" />
+                </TouchableOpacity>
+                <Text style={styles.certificationTexte}>
+                  <Text onPress={() => setCertifiePro((actuel) => !actuel)}>
+                    Je certifie agir en tant que professionnel pour les besoins de mon activité et j'accepte les{' '}
+                  </Text>
+                  <Text style={styles.lienCgu} onPress={() => setDocumentLegal('cgu')}>CGU/CGV</Text>
+                </Text>
+              </View>
             </>
           ) : null}
           {message ? <Text style={styles.message}>{message}</Text> : null}
@@ -237,7 +261,7 @@ export default function AuthScreen({ modeInitial = 'connexion', emailConfirme = 
         </View>
       </ScrollView>
       <LienReinitialisation />
-      <PiedLegal />
+      <PiedLegal documentDemande={documentLegal} onDocumentDemande={setDocumentLegal} />
       <Modal visible={compteCree != null} transparent animationType="fade" onRequestClose={retourConnexion}>
         <View style={styles.voile}>
           <View style={styles.modale}>
@@ -310,6 +334,10 @@ const styles = StyleSheet.create({
   regle: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   regleTexte: { color: '#94A3B8', fontSize: 12, fontWeight: '500' },
   regleOk: { color: '#1F7A4D' },
+  certification: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 12 },
+  case: { minWidth: 40, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  certificationTexte: { flex: 1, color: '#1E293B', fontSize: 13, lineHeight: 18, paddingTop: 10 },
+  lienCgu: { color: '#0F2D46', fontWeight: '600', textDecorationLine: 'underline' },
   erreur: { color: '#A33B32', fontSize: 13, lineHeight: 18, marginBottom: 12 },
   message: { color: '#0F2D46', marginBottom: 12, lineHeight: 20 },
   primary: { backgroundColor: '#F4C430', borderRadius: 8, minHeight: 40, paddingVertical: 8, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },

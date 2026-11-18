@@ -3,8 +3,20 @@ import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'rea
 
 import { DOCUMENTS_LEGAUX, type IdDocumentLegal } from '../constants/legal';
 
-export default function PiedLegal() {
-  const [documentActif, setDocumentActif] = useState<IdDocumentLegal | null>(null);
+export default function PiedLegal({
+  documentDemande,
+  onDocumentDemande,
+}: {
+  documentDemande?: IdDocumentLegal | null;
+  onDocumentDemande?: (id: IdDocumentLegal | null) => void;
+} = {}) {
+  const [interne, setInterne] = useState<IdDocumentLegal | null>(null);
+  const controle = documentDemande !== undefined;
+  const documentActif = controle ? (documentDemande ?? null) : interne;
+  const setDocumentActif = (id: IdDocumentLegal | null) => {
+    if (!controle) setInterne(id);
+    onDocumentDemande?.(id);
+  };
   const document = DOCUMENTS_LEGAUX.find((entree) => entree.id === documentActif) ?? null;
 
   return (

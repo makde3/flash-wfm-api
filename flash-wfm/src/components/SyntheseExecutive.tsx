@@ -245,7 +245,7 @@ export default function SyntheseExecutive({
     { label: 'DMT', valeur: `${aht || '—'} s` },
     { label: 'SLA / Délai cible', valeur: delai },
     { label: 'Taux d\'occupation', valeur: `${tauxOccupation || '—'} %` },
-    { label: 'Shrinkage', valeur: `${shrinkage || '—'} %` },
+    { label: 'Indisponibilité', valeur: `${shrinkage || '—'} %` },
     { label: 'Amplitude', valeur: `${heuresOuverture || '—'} h` },
     { label: 'ETP moyen dispo', valeur: etpDispo == null ? '—' : etpTexte(etpDispo) },
   ];
@@ -264,7 +264,7 @@ export default function SyntheseExecutive({
       { label: 'DMT (s)', valeur: mesure(aht), format: '#,##0' },
       { label: 'SLA / Délai cible', valeur: delai },
       { label: "Taux d'occupation (%)", valeur: mesure(tauxOccupation), format: '0' },
-      { label: 'Shrinkage (%)', valeur: mesure(shrinkage), format: '0' },
+      { label: 'Indisponibilité (%)', valeur: mesure(shrinkage), format: '0' },
       { label: 'Amplitude (h)', valeur: mesure(heuresOuverture), format: '0.0' },
       { label: 'ETP moyen dispo', valeur: etpDispo ?? '—', format: '#,##0.0' },
     ],

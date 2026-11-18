@@ -86,6 +86,13 @@ function lireLigne(row: Record<string, unknown>): LigneBrute | null {
   return null;
 }
 
+export function compterLignesEcartees(lignes: Record<string, unknown>[]): number {
+  return lignes.reduce((total, row) => {
+    if (row == null || typeof row !== 'object' || Array.isArray(row)) return total + 1;
+    return lireLigne(row) ? total : total + 1;
+  }, 0);
+}
+
 export function analyserHistorique(lignes: Record<string, unknown>[]): SerieSkill[] {
   const groupes = new Map<string, Map<string, { volume: number; dmtSomme: number; dmtPoids: number }>>();
   const ordre: string[] = [];

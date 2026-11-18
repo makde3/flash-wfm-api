@@ -14,6 +14,7 @@ type AuthContextValue = {
   toggleDevPro: () => void;
   isPro: boolean;
   hasProAccess: boolean;
+  profilPret: boolean;
   abonnementActif: boolean;
   assurerDroits: () => void;
 };
@@ -53,9 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [devForcePro, setDevForcePro] = useState(false);
   const [profile, setProfile] = useState<ProfilAuth | null>(null);
   const [abonnementActif, setAbonnementActif] = useState(false);
+  const [profilPret, setProfilPret] = useState(false);
   const toggleDevPro = () => setDevForcePro((prev) => !prev);
   const isPro = profile?.plan === 'pro' || profile?.role === 'admin';
-  const hasProAccess = isPro;
+  const hasProAccess = profilPret && isPro;
   const assurerDroits = () => {
     void (async () => {
       try {
@@ -80,9 +82,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUserId(null);
         setProfile(null);
         setAbonnementActif(false);
+        setProfilPret(true);
         return;
       }
       setUserId(id);
+      setProfilPret(false);
       try {
         const [{ data: abonnements }, profil] = await Promise.all([
           supabase.from('subscriptions').select('status').eq('user_id', id),
@@ -91,10 +95,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!actif) return;
         setAbonnementActif((abonnements ?? []).some((ligne) => ligne.status === 'active'));
         setProfile(profil);
+        setProfilPret(true);
       } catch {
         if (!actif) return;
         setAbonnementActif(false);
         setProfile(profilLibre());
+        setProfilPret(true);
       }
     };
     supabase.auth.getSession().then(({ data }) => {
@@ -115,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ userId, profile, devForcePro, toggleDevPro, isPro, hasProAccess, abonnementActif, assurerDroits }}>
+    <AuthContext.Provider value={{ userId, profile, devForcePro, toggleDevPro, isPro, hasProAccess, profilPret, abonnementActif, assurerDroits }}>
       {children}
     </AuthContext.Provider>
   );

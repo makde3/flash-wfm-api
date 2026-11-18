@@ -129,8 +129,15 @@ export function effacerCache() {
 export function nombre(valeur: unknown): number | null {
   if (typeof valeur === 'number' && Number.isFinite(valeur)) return valeur;
   if (typeof valeur !== 'string') return null;
-  const texte = valeur.trim().replace(/\s/g, '').replace(',', '.');
+  let texte = valeur.trim().replace(/[\s\u00a0\u202f]/g, '');
   if (!texte) return null;
+  const virgule = texte.lastIndexOf(',');
+  const point = texte.lastIndexOf('.');
+  if (virgule >= 0 && point >= 0) {
+    texte = virgule > point ? texte.replace(/\./g, '').replace(',', '.') : texte.replace(/,/g, '');
+  } else if (virgule >= 0) {
+    texte = texte.replace(',', '.');
+  }
   const n = Number(texte);
   return Number.isFinite(n) ? n : null;
 }

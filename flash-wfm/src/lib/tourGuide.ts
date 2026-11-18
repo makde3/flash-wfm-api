@@ -45,19 +45,19 @@ export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: str
     id: 'tour-etp',
     etape: 2,
     titre: 'ETP planifiés',
-    texte: 'Importez le planning des ETP : il pilote les effectifs et verrouille la saisie manuelle. Sans fichier, passez l’étape et renseignez les ETP par file.',
+    texte: 'Le Plan Découverte gratuit couvre une seule file, saisie à la main. L’import du planning ETP, qui pilote les effectifs, est réservé au plan Pro.',
   },
   {
     id: 'tour-leviers',
     etape: 3,
     titre: 'Paramétrage',
-    texte: 'Réglez la DMT, le SLA, l’occupation et le shrinkage. Ces leviers alimentent le calcul Erlang C avant la prévision.',
+    texte: 'Réglez la DMT, le niveau de service, l’occupation et l’indisponibilité. Ces leviers alimentent le calcul Erlang C avant la prévision.',
   },
   {
     id: 'tour-modeles',
     etape: 4,
     titre: 'Moteurs de prévision',
-    texte: 'Comparez Recommandé (Auto), Saisonnalité & Tendances, IA & Machine Learning et le Modèle Hybride. Auto retient le moteur au plus faible WAPE.',
+    texte: 'Le Plan Découverte gratuit utilise Saisonnalité & Tendances. Recommandé (Auto), IA & Machine Learning et le Modèle Hybride sont réservés au plan Pro.',
   },
   {
     id: 'tour-horizon',
@@ -69,7 +69,7 @@ export const ETAPES_GUIDE: { id: string; etape: Etape; titre: string; texte: str
     id: 'tour-restitution',
     etape: 4,
     titre: 'Vues et fériés',
-    texte: 'Passez en Journalier, Hebdo ou Mensuel. Les fériés se basculent sur leur badge, et l’export Excel suit la vue affichée.',
+    texte: 'Après le calcul, passez en Journalier, Hebdo ou Mensuel et basculez les fériés sur leur badge. L’export Excel est réservé au plan Pro.',
   },
 ];
 
@@ -89,7 +89,7 @@ function recadrerPopover() {
 }
 
 function cibleEtape(id: string) {
-  if (id === 'tour-restitution') return document.getElementById('tour-plan') ?? document.getElementById('tour-generer');
+  if (id === 'tour-restitution') return document.getElementById('tour-generer');
   return document.getElementById(id);
 }
 
@@ -119,9 +119,7 @@ export async function lancerTourDriver(aller: (etape: Etape) => void, terminer: 
     terminer();
   };
   const steps: DriveStep[] = ETAPES_GUIDE.map((etape, index) => ({
-    element: etape.id === 'tour-restitution'
-      ? () => cibleEtape(etape.id) ?? document.body
-      : `#${etape.id}`,
+    element: () => cibleEtape(etape.id) ?? document.getElementById('tour-generer') ?? document.body,
     waitForElement: 900,
     popover: {
       title: etape.titre,

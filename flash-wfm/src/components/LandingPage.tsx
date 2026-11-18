@@ -105,8 +105,8 @@ export default function LandingPage({ onConnexion, onEssai }: LandingPageProps) 
               <Ionicons name="shield-checkmark-outline" size={18} color="#0F2D46" />
             </View>
             <View style={styles.reassuranceTexte}>
-              <Text style={styles.reassuranceTitre}>Zéro projet IT · Zéro contrainte RGPD · 0 € de mise en place</Text>
-              <Text style={styles.reassuranceCorps}>Vos exports de flux et plannings ETP sont traités exclusivement en mémoire dans votre navigateur et ne sont jamais envoyés ni stockés sur nos serveurs. Aucune intégration technique ni aucun contrat de sous-traitance RGPD (DPA) à faire valider par votre DPO : vous êtes opérationnel en 2 minutes.</Text>
+              <Text style={styles.reassuranceTitre}>Zéro projet IT · Traitement chiffré en mémoire · 0 € de mise en place</Text>
+              <Text style={styles.reassuranceCorps}>Vos exports de flux et plannings ETP sont transmis de manière chiffrée à notre moteur de calcul. Ils sont traités uniquement en mémoire vive, le temps du calcul, sans stockage ni conservation des fichiers. Aucune intégration technique à prévoir : vous êtes opérationnel en 2 minutes.</Text>
             </View>
           </View>
 
